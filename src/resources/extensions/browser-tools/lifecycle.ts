@@ -181,7 +181,12 @@ export async function ensureBrowser(): Promise<{ browser: Browser; context: Brow
 	// Lazy import so playwright is only loaded when actually needed
 	const { chromium } = await import("playwright");
 
-	const launchOptions: Record<string, unknown> = { headless: false };
+	// Auto-detect headless environments: Linux without $DISPLAY has no GUI.
+	// All browser tool operations (navigation, screenshots, DOM) work in headless mode.
+	const needsHeadless = process.platform === "linux" && !process.env.DISPLAY;
+	const launchOptions: Record<string, unknown> = {
+		headless: needsHeadless || process.env.FORCE_HEADLESS === "true",
+	};
 	const customPath = process.env.BROWSER_PATH;
 	if (customPath) launchOptions.executablePath = customPath;
 	const browser = await chromium.launch(launchOptions);
