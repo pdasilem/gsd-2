@@ -40,7 +40,7 @@ import {
   readUnitRuntimeRecord,
   writeUnitRuntimeRecord,
 } from "./unit-runtime.js";
-import { resolveAutoSupervisorConfig, resolveModelForUnit, resolveSkillDiscoveryMode, loadEffectiveGSDPreferences } from "./preferences.js";
+import { resolveAutoSupervisorConfig, resolveModelForUnit, resolveModelWithFallbacksForUnit, resolveSkillDiscoveryMode, loadEffectiveGSDPreferences } from "./preferences.js";
 import type { GSDPreferences } from "./preferences.js";
 import {
   validatePlanBoundary,
@@ -1395,16 +1395,49 @@ async function dispatchNextUnit(
   }
 
   // Switch model if preferences specify one for this unit type
-  const preferredModelId = resolveModelForUnit(unitType);
-  if (preferredModelId) {
-    // Try to find the model across all providers
+  // Try primary model, then fallbacks in order if setting fails
+  const modelConfig = resolveModelWithFallbacksForUnit(unitType);
+  if (modelConfig) {
     const allModels = ctx.modelRegistry.getAll();
-    const model = allModels.find(m => m.id === preferredModelId);
-    if (model) {
+    const modelsToTry = [modelConfig.primary, ...modelConfig.fallbacks];
+    let modelSet = false;
+
+    for (const modelId of modelsToTry) {
+      const model = allModels.find(m => m.id === modelId);
+      if (!model) {
+        ctx.ui.notify(`Model ${modelId} not found in registry, trying fallback.`, "warning");
+        continue;
+      }
+
       const ok = await pi.setModel(model, { persist: false });
       if (ok) {
-        ctx.ui.notify(`Model: ${preferredModelId}`, "info");
+        const fallbackNote = modelId === modelConfig.primary
+          ? ""
+          : ` (fallback from ${modelConfig.primary})`;
+        ctx.ui.notify(`Model: ${modelId}${fallbackNote}`, "info");
+        modelSet = true;
+        break;
+      } else {
+        const nextModel = modelsToTry[modelsToTry.indexOf(modelId) + 1];
+        if (nextModel) {
+          ctx.ui.notify(
+            `Failed to set model ${modelId}, trying fallback ${nextModel}...`,
+            "warning",
+          );
+        } else {
+          ctx.ui.notify(
+            `Failed to set model ${modelId} and all fallbacks exhausted. Using default model.`,
+            "warning",
+          );
+        }
       }
+    }
+
+    if (!modelSet) {
+      ctx.ui.notify(
+        `Could not set any preferred model for ${unitType}. Continuing with default.`,
+        "warning",
+      );
     }
   }
 
