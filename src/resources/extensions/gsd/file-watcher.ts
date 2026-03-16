@@ -1,5 +1,6 @@
 import type { FSWatcher } from "chokidar";
 import type { EventBus } from "@gsd/pi-coding-agent";
+import { relative } from "node:path";
 
 let watcher: FSWatcher | null = null;
 
@@ -50,17 +51,16 @@ export async function startFileWatcher(
 	}
 
 	function resolveEvent(filePath: string): string | null {
-		const relative = filePath
-			.replace(agentDir, "")
-			.replace(/^[/\\]+/, "");
+		const rel = relative(agentDir, filePath);
+		if (rel.startsWith("..")) return null;
 
 		// Check direct file matches
 		for (const [file, event] of Object.entries(EVENT_MAP)) {
-			if (relative === file) return event;
+			if (rel === file) return event;
 		}
 
 		// Check extensions directory
-		if (relative.startsWith(EXTENSIONS_DIR + "/") || relative === EXTENSIONS_DIR) {
+		if (rel.startsWith(EXTENSIONS_DIR + "/") || rel === EXTENSIONS_DIR) {
 			return "extensions-changed";
 		}
 

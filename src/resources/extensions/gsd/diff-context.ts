@@ -6,7 +6,7 @@
  * Standalone module: only imports node:child_process and node:path.
  */
 
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -32,8 +32,8 @@ const EXEC_OPTS = {
   stdio: ["pipe", "pipe", "pipe"] as ["pipe", "pipe", "pipe"],
 };
 
-function git(cmd: string, cwd: string): string {
-  return execSync(`git ${cmd}`, { ...EXEC_OPTS, cwd }).trim();
+function git(args: string[], cwd: string): string {
+  return execFileSync("git", args, { ...EXEC_OPTS, cwd }).trim();
 }
 
 function splitLines(output: string): string[] {
@@ -62,13 +62,14 @@ export async function getRecentlyChangedFiles(
     // 1. Committed changes in the last N commits (or since sinceDays)
     let committedFiles: string[] = [];
     try {
-      const since = `--since="${sinceDays} days ago"`;
-      const raw = git(`log --diff-filter=ACMR --name-only --pretty=format: ${since}`, dir);
+      const days = Math.max(1, Math.floor(Number(sinceDays)));
+      if (!Number.isFinite(days)) throw new Error("invalid sinceDays");
+      const raw = git(["log", "--diff-filter=ACMR", "--name-only", "--pretty=format:", `--since=${days} days ago`], dir);
       committedFiles = splitLines(raw);
     } catch {
       // Fallback: use HEAD~10
       try {
-        const raw = git("diff --name-only HEAD~10", dir);
+        const raw = git(["diff", "--name-only", "HEAD~10"], dir);
         committedFiles = splitLines(raw);
       } catch {
         // Shallow clone or <10 commits — ignore
@@ -78,7 +79,7 @@ export async function getRecentlyChangedFiles(
     // 2. Staged changes
     let stagedFiles: string[] = [];
     try {
-      const raw = git("diff --cached --name-only", dir);
+      const raw = git(["diff", "--cached", "--name-only"], dir);
       stagedFiles = splitLines(raw);
     } catch {
       // ignore
@@ -87,7 +88,7 @@ export async function getRecentlyChangedFiles(
     // 3. Unstaged / untracked via porcelain status
     let statusFiles: string[] = [];
     try {
-      const raw = git("status --porcelain", dir);
+      const raw = git(["status", "--porcelain"], dir);
       statusFiles = splitLines(raw).map((line) => line.slice(3)); // strip XY + space
     } catch {
       // ignore
@@ -131,7 +132,7 @@ export async function getChangedFilesWithContext(
 
     // 1. Staged files with numstat
     try {
-      const numstat = git("diff --cached --numstat", dir);
+      const numstat = git(["diff", "--cached", "--numstat"], dir);
       for (const line of splitLines(numstat)) {
         const [added, deleted, filePath] = line.split("\t");
         if (!filePath) continue;
@@ -147,7 +148,7 @@ export async function getChangedFilesWithContext(
 
     // 2. Unstaged modifications with numstat
     try {
-      const numstat = git("diff --numstat", dir);
+      const numstat = git(["diff", "--numstat"], dir);
       for (const line of splitLines(numstat)) {
         const [added, deleted, filePath] = line.split("\t");
         if (!filePath) continue;
@@ -163,7 +164,7 @@ export async function getChangedFilesWithContext(
 
     // 3. Untracked / deleted from porcelain status
     try {
-      const raw = git("status --porcelain", dir);
+      const raw = git(["status", "--porcelain"], dir);
       for (const line of splitLines(raw)) {
         const code = line.slice(0, 2);
         const filePath = line.slice(3);
