@@ -91,7 +91,8 @@ import {
 } from "./auto-observability.js";
 import { closeoutUnit } from "./auto-unit-closeout.js";
 import { recoverTimedOutUnit } from "./auto-timeout-recovery.js";
-import { selectAndApplyModel } from "./auto-model-selection.js";
+import { selfHealRuntimeRecords } from "./auto-recovery.js";
+import { selectAndApplyModel, resolveModelId } from "./auto-model-selection.js";
 import {
   syncProjectRootToWorktree,
   syncStateToProjectRoot,
@@ -172,7 +173,9 @@ import {
   buildLoopRemediationSteps,
   reconcileMergeState,
 } from "./auto-recovery.js";
-import { resolveDispatch } from "./auto-dispatch.js";
+import { resolveDispatch, DISPATCH_RULES } from "./auto-dispatch.js";
+import { initRegistry, convertDispatchRules } from "./rule-registry.js";
+import { emitJournalEvent as _emitJournalEvent, type JournalEntry } from "./journal.js";
 import {
   type AutoDashboardData,
   updateProgressWidget as _updateProgressWidget,
@@ -202,7 +205,7 @@ import {
   postUnitPostVerification,
 } from "./auto-post-unit.js";
 import { bootstrapAutoSession, type BootstrapDeps } from "./auto-start.js";
-import { autoLoop, resolveAgentEnd, isSessionSwitchInFlight, type LoopDeps } from "./auto-loop.js";
+import { autoLoop, resolveAgentEnd, resolveAgentEndCancelled, _resetPendingResolve, isSessionSwitchInFlight, type LoopDeps } from "./auto-loop.js";
 import {
   WorktreeResolver,
   type WorktreeResolverDeps,
@@ -339,7 +342,9 @@ export function getAutoDashboardData(): AutoDashboardData {
     paused: s.paused,
     stepMode: s.stepMode,
     startTime: s.autoStartTime,
-    elapsed: s.active || s.paused ? Date.now() - s.autoStartTime : 0,
+    elapsed: s.active || s.paused
+      ? (s.autoStartTime > 0 ? Date.now() - s.autoStartTime : 0)
+      : 0,
     currentUnit: s.currentUnit ? { ...s.currentUnit } : null,
     completedUnits: [...s.completedUnits],
     basePath: s.basePath,
@@ -516,16 +521,19 @@ function handleLostSessionLock(
   clearUnitTimeout();
   deregisterSigtermHandler();
   clearCmuxSidebar(loadEffectiveGSDPreferences()?.preferences);
+  const base = lockBase();
+  const lockFilePath = base ? join(gsdRoot(base), "auto.lock") : "unknown";
+  const recoverySuggestion = "\nTo recover, run: gsd doctor --fix";
   const message =
     lockStatus?.failureReason === "pid-mismatch"
       ? lockStatus.existingPid
-        ? `Session lock moved to PID ${lockStatus.existingPid} — another GSD process appears to have taken over. Stopping gracefully.`
-        : "Session lock moved to a different process — another GSD process appears to have taken over. Stopping gracefully."
+        ? `Session lock (${lockFilePath}) moved to PID ${lockStatus.existingPid} — another GSD process appears to have taken over. Stopping gracefully.${recoverySuggestion}`
+        : `Session lock (${lockFilePath}) moved to a different process — another GSD process appears to have taken over. Stopping gracefully.${recoverySuggestion}`
       : lockStatus?.failureReason === "missing-metadata"
-        ? "Session lock metadata disappeared, so ownership could not be confirmed. Stopping gracefully."
+        ? `Session lock metadata (${lockFilePath}) disappeared, so ownership could not be confirmed. Stopping gracefully.${recoverySuggestion}`
         : lockStatus?.failureReason === "compromised"
-          ? "Session lock was compromised or invalidated during heartbeat checks; takeover was not confirmed. Stopping gracefully."
-          : "Session lock lost. Stopping gracefully.";
+          ? `Session lock (${lockFilePath}) was compromised during heartbeat checks (PID ${process.pid}). This can happen after long event loop stalls during subagent execution.${recoverySuggestion}`
+          : `Session lock lost (${lockFilePath}). Stopping gracefully.${recoverySuggestion}`;
   ctx?.ui.notify(
     message,
     "error",
@@ -533,6 +541,33 @@ function handleLostSessionLock(
   ctx?.ui.setStatus("gsd-auto", undefined);
   ctx?.ui.setWidget("gsd-progress", undefined);
   ctx?.ui.setFooter(undefined);
+}
+
+/**
+ * Lightweight cleanup after autoLoop exits via step-wizard break.
+ *
+ * Unlike stopAuto (which tears down the entire session), this only clears
+ * the stale unit state, progress widget, status badge, and restores CWD so
+ * the dashboard does not show an orphaned timer and the shell is usable.
+ */
+function cleanupAfterLoopExit(ctx: ExtensionContext): void {
+  s.currentUnit = null;
+  s.active = false;
+  clearUnitTimeout();
+
+  ctx.ui.setStatus("gsd-auto", undefined);
+  ctx.ui.setWidget("gsd-progress", undefined);
+  ctx.ui.setFooter(undefined);
+
+  // Restore CWD out of worktree back to original project root
+  if (s.originalBasePath) {
+    s.basePath = s.originalBasePath;
+    try {
+      process.chdir(s.basePath);
+    } catch {
+      /* best-effort */
+    }
+  }
 }
 
 export async function stopAuto(
@@ -688,8 +723,28 @@ export async function stopAuto(
     } catch (e) {
       debugLog("stop-cleanup-model", { error: e instanceof Error ? e.message : String(e) });
     }
+
+    // ── Step 14: Unblock pending unitPromise (#1799) ──
+    // resolveAgentEnd unblocks autoLoop's `await unitPromise` so it can see
+    // s.active === false and exit cleanly. Without this, autoLoop hangs
+    // forever and the interactive loop is blocked.
+    try {
+      resolveAgentEnd({ messages: [] });
+      _resetPendingResolve();
+    } catch (e) {
+      debugLog("stop-cleanup-pending-resolve", { error: e instanceof Error ? e.message : String(e) });
+    }
   } finally {
     // ── Critical invariants: these MUST execute regardless of errors ──
+    // Browser teardown — prevent orphaned Chrome processes across retries (#1733)
+    try {
+      const { getBrowser } = await import("../browser-tools/state.js");
+      if (getBrowser()) {
+        const { closeBrowser } = await import("../browser-tools/lifecycle.js");
+        await closeBrowser();
+      }
+    } catch { /* non-fatal: browser-tools may not be loaded */ }
+
     // External cleanup (not covered by session reset)
     clearInFlightTools();
     clearSliceProgressCache();
@@ -718,6 +773,8 @@ export async function pauseAuto(
 ): Promise<void> {
   if (!s.active) return;
   clearUnitTimeout();
+  // Unblock any pending unit promise so the auto-loop is not orphaned.
+  resolveAgentEndCancelled();
 
   s.pausedSessionFile = ctx?.sessionManager?.getSessionFile() ?? null;
 
@@ -745,12 +802,31 @@ export async function pauseAuto(
     // Non-fatal — resume will still work via full bootstrap, just without worktree context
   }
 
+  // Close out the current unit so its runtime record doesn't stay at "dispatched"
+  if (s.currentUnit && ctx) {
+    try {
+      await closeoutUnit(ctx, s.basePath, s.currentUnit.type, s.currentUnit.id, s.currentUnit.startedAt);
+    } catch {
+      // Non-fatal — best-effort closeout on pause
+    }
+    try {
+      clearUnitRuntimeRecord(s.basePath, s.currentUnit.type, s.currentUnit.id);
+    } catch {
+      // Non-fatal
+    }
+    s.currentUnit = null;
+  }
+
   if (lockBase()) {
     releaseSessionLock(lockBase());
     clearLock(lockBase());
   }
 
   deregisterSigtermHandler();
+
+  // Unblock pending unitPromise so autoLoop exits cleanly (#1799)
+  resolveAgentEnd({ messages: [] });
+  _resetPendingResolve();
 
   s.active = false;
   s.paused = true;
@@ -810,6 +886,11 @@ function buildResolver(): WorktreeResolver {
  * This bundles all private functions that autoLoop needs without exporting them.
  */
 function buildLoopDeps(): LoopDeps {
+  // Initialize the unified rule registry with converted dispatch rules.
+  // Must happen before LoopDeps is assembled so facade functions
+  // (resolveDispatch, runPreDispatchHooks, etc.) delegate to the registry.
+  initRegistry(convertDispatchRules(DISPATCH_RULES));
+
   return {
     lockBase,
     buildSnapshotOpts,
@@ -823,6 +904,7 @@ function buildLoopDeps(): LoopDeps {
     // State and cache
     invalidateAllCaches,
     deriveState,
+    rebuildState,
     loadEffectiveGSDPreferences,
 
     // Pre-dispatch health gate
@@ -886,6 +968,7 @@ function buildLoopDeps(): LoopDeps {
 
     // Model selection + supervision
     selectAndApplyModel,
+    resolveModelId,
     startUnitSupervision,
 
     // Prompt helpers
@@ -918,6 +1001,9 @@ function buildLoopDeps(): LoopDeps {
         return "";
       }
     },
+
+    // Journal
+    emitJournalEvent: (entry: JournalEntry) => _emitJournalEvent(s.basePath, entry),
   } as unknown as LoopDeps;
 }
 
@@ -966,18 +1052,30 @@ export async function startAuto(
             || !!freshStartAssessment.lock
           );
         if (shouldResumePausedSession) {
-          s.currentMilestoneId = meta.milestoneId;
-          s.originalBasePath = meta.originalBasePath || base;
-          s.stepMode = meta.stepMode ?? requestedStepMode;
-          s.pausedSessionFile = meta.sessionFile ?? null;
-          s.pausedUnitType = meta.unitType ?? null;
-          s.pausedUnitId = meta.unitId ?? null;
-          s.paused = true;
-          try { unlinkSync(pausedPath); } catch { /* non-fatal */ }
-          ctx.ui.notify(
-            `Resuming paused session for ${meta.milestoneId}${meta.worktreePath && existsSync(meta.worktreePath) ? ` (worktree)` : ""}.`,
-            "info",
-          );
+          // Validate the milestone still exists and isn't already complete (#1664).
+          const mDir = resolveMilestonePath(base, meta.milestoneId);
+          const summaryFile = resolveMilestoneFile(base, meta.milestoneId, "SUMMARY");
+          if (!mDir || summaryFile) {
+            // Stale milestone — clean up and fall through to fresh bootstrap
+            try { unlinkSync(pausedPath); } catch { /* non-fatal */ }
+            ctx.ui.notify(
+              `Paused milestone ${meta.milestoneId} is ${!mDir ? "missing" : "already complete"}. Starting fresh.`,
+              "info",
+            );
+          } else {
+            s.currentMilestoneId = meta.milestoneId;
+            s.originalBasePath = meta.originalBasePath || base;
+            s.stepMode = meta.stepMode ?? requestedStepMode;
+            s.pausedSessionFile = meta.sessionFile ?? null;
+            s.pausedUnitType = meta.unitType ?? null;
+            s.pausedUnitId = meta.unitId ?? null;
+            s.paused = true;
+            try { unlinkSync(pausedPath); } catch { /* non-fatal */ }
+            ctx.ui.notify(
+              `Resuming paused session for ${meta.milestoneId}${meta.worktreePath && existsSync(meta.worktreePath) ? ` (worktree)` : ""}.`,
+              "info",
+            );
+          }
         } else if (existsSync(pausedPath)) {
           try { unlinkSync(pausedPath); } catch { /* non-fatal */ }
         }
@@ -1091,6 +1189,15 @@ export async function startAuto(
     }
     invalidateAllCaches();
 
+    // Clean stale runtime records left from the paused session
+    try {
+      await selfHealRuntimeRecords(s.basePath, ctx);
+    } catch (e) {
+      debugLog("resume-self-heal-runtime-failed", {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+
     if (s.pausedSessionFile) {
       const activityDir = join(gsdRoot(s.basePath), "activity");
       const recovery = synthesizeCrashRecovery(
@@ -1124,7 +1231,11 @@ export async function startAuto(
     );
     logCmuxEvent(loadEffectiveGSDPreferences()?.preferences, s.stepMode ? "Step-mode resumed." : "Auto-mode resumed.", "progress");
 
+    // Clear orphaned runtime records from prior process deaths before entering the loop
+    await selfHealRuntimeRecords(s.basePath, ctx);
+
     await autoLoop(ctx, pi, s, buildLoopDeps());
+    cleanupAfterLoopExit(ctx);
     return;
   }
 
@@ -1155,8 +1266,12 @@ export async function startAuto(
   }
   logCmuxEvent(loadEffectiveGSDPreferences()?.preferences, requestedStepMode ? "Step-mode started." : "Auto-mode started.", "progress");
 
+  // Clear orphaned runtime records from prior process deaths before entering the loop
+  await selfHealRuntimeRecords(s.basePath, ctx);
+
   // Dispatch the first unit
   await autoLoop(ctx, pi, s, buildLoopDeps());
+  cleanupAfterLoopExit(ctx);
 }
 
 // ─── Agent End Handler ────────────────────────────────────────────────────────
@@ -1174,7 +1289,11 @@ export async function handleAgentEnd(
   ctx: ExtensionContext,
   pi: ExtensionAPI,
 ): Promise<void> {
-  if (!s.active || !s.cmdCtx) return;
+  if (!s.active || !s.cmdCtx) {
+    // Even when inactive, resolve any pending promise so the loop is unblocked.
+    resolveAgentEndCancelled();
+    return;
+  }
   clearUnitTimeout();
   resolveAgentEnd({ messages: [] });
 }
@@ -1311,15 +1430,19 @@ export async function dispatchHookUnit(
 
   if (hookModel) {
     const availableModels = ctx.modelRegistry.getAvailable();
-    const match = availableModels.find(
-      (m) => m.id === hookModel || `${m.provider}/${m.id}` === hookModel,
-    );
+    const match = resolveModelId(hookModel, availableModels, ctx.model?.provider);
     if (match) {
       try {
         await pi.setModel(match);
       } catch {
         /* non-fatal */
       }
+    } else {
+      ctx.ui.notify(
+        `Hook model "${hookModel}" not found in available models. Falling back to current session model. ` +
+        `Ensure the model is defined in models.json and has auth configured.`,
+        "warning",
+      );
     }
   }
 
