@@ -33,8 +33,9 @@ export function captureAvailableSkills(): void {
   const skillsDir = join(homedir(), ".agents", "skills");
   const legacyDir = join(homedir(), ".gsd", "agent", "skills");
   const names = listSkillNames(skillsDir);
-  // Include skills still in the legacy directory (pre-migration users)
-  const legacyNames = listSkillNames(legacyDir);
+  // Include skills still in the legacy directory only if migration hasn't completed
+  const legacyMigrated = existsSync(join(legacyDir, ".migrated-to-agents"));
+  const legacyNames = legacyMigrated ? [] : listSkillNames(legacyDir);
   const all = new Set([...names, ...legacyNames]);
   availableSkills = [...all];
   activelyLoadedSkills.clear();
@@ -106,7 +107,9 @@ export function detectStaleSkills(
   // Check all installed skills, not just those with usage data
   const skillsDir = join(homedir(), ".agents", "skills");
   const legacyDir = join(homedir(), ".gsd", "agent", "skills");
-  const installedSet = new Set([...listSkillNames(skillsDir), ...listSkillNames(legacyDir)]);
+  const legacyMigrated = existsSync(join(legacyDir, ".migrated-to-agents"));
+  const legacyNames = legacyMigrated ? [] : listSkillNames(legacyDir);
+  const installedSet = new Set([...listSkillNames(skillsDir), ...legacyNames]);
   const installed = [...installedSet];
 
   for (const skill of installed) {
