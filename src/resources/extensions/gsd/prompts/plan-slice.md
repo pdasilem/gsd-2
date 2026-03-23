@@ -63,10 +63,9 @@ Then:
    - a matching task plan file with description, steps, must-haves, verification, inputs, and expected output
    - **Inputs and Expected Output must list concrete backtick-wrapped file paths** (e.g. `` `src/types.ts` ``). These are machine-parsed to derive task dependencies — vague prose without paths breaks parallel execution. Every task must have at least one output file path.
    - Observability Impact section **only if the task touches runtime boundaries, async flows, or error paths** — omit it otherwise
-6. Write `{{outputPath}}`
-7. Write individual task plans in `{{slicePath}}/tasks/`: `T01-PLAN.md`, `T02-PLAN.md`, etc.
-8. If the tool path for this planning phase is available, call it to persist the slice planning state before finishing. Do **not** rely on direct `PLAN.md` writes as the source of truth; any plan file you write must reflect tool-backed state rather than bypass it.
-9. **Self-audit the plan.** Walk through each check — if any fail, fix the plan files before moving on:
+6. **Persist planning state through DB-backed tools.** Call `gsd_plan_slice` with the full slice planning payload (goal, demo, must-haves, verification, tasks, and metadata). Then call `gsd_plan_task` for each task to persist its planning fields. These tools write to the DB and render `{{outputPath}}` and `{{slicePath}}/tasks/T##-PLAN.md` files automatically. Do **not** rely on direct `PLAN.md` writes as the source of truth; the DB-backed tools are the canonical write path for slice and task planning state.
+7. If `gsd_plan_slice` / `gsd_plan_task` are unavailable (tool not registered), fall back to writing `{{outputPath}}` and task plan files directly — but treat this as a degraded path, not the default.
+8. **Self-audit the plan.** Walk through each check — if any fail, fix the plan files before moving on:
     - **Completion semantics:** If every task were completed exactly as written, the slice goal/demo should actually be true.
     - **Requirement coverage:** Every must-have in the slice maps to at least one task. No must-have is orphaned. If `REQUIREMENTS.md` exists, every Active requirement this slice owns maps to at least one task.
     - **Task completeness:** Every task has steps, must-haves, verification, inputs, and expected output — none are blank or vague. Inputs and Expected Output list backtick-wrapped file paths, not prose descriptions.

@@ -147,6 +147,26 @@ test("plan-slice prompt no longer frames direct PLAN writes as the source of tru
   assert.match(prompt, /Do \*\*not\*\* rely on direct `PLAN\.md` writes as the source of truth/i);
 });
 
+test("plan-slice prompt explicitly names gsd_plan_slice and gsd_plan_task as DB-backed planning tools", () => {
+  const prompt = readPrompt("plan-slice");
+  assert.match(prompt, /gsd_plan_slice/);
+  assert.match(prompt, /gsd_plan_task/);
+  // The prompt should describe these as the canonical write path
+  assert.match(prompt, /DB-backed tools are the canonical write path/i);
+});
+
+test("plan-slice prompt treats direct file writes as a degraded fallback, not the default", () => {
+  const prompt = readPrompt("plan-slice");
+  assert.match(prompt, /degraded path, not the default/i);
+  // Should not instruct to "Write {{outputPath}}" as a primary step
+  assert.doesNotMatch(prompt, /^\d+\.\s+Write `?\{\{outputPath\}\}`?\s*$/m);
+});
+
+test("plan-slice prompt instructs calling gsd_plan_task for each task", () => {
+  const prompt = readPrompt("plan-slice");
+  assert.match(prompt, /call `gsd_plan_task` for each task/i);
+});
+
 test("replan-slice prompt requires DB-backed planning state when available", () => {
   const prompt = readPrompt("replan-slice");
   assert.match(prompt, /DB-backed planning tool exists for this phase, use it as the source of truth/i);

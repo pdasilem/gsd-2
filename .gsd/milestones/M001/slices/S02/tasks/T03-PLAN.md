@@ -45,3 +45,9 @@ Finish the slice by aligning the planning prompt surface with the new implementa
 - `src/resources/extensions/gsd/prompts/plan-slice.md` — updated DB-backed slice/task planning instructions
 - `src/resources/extensions/gsd/tests/prompt-contracts.test.ts` — stronger prompt contract coverage for `gsd_plan_slice` / `gsd_plan_task`
 - `src/resources/extensions/gsd/tests/plan-slice-prompt.test.ts` — updated template tests if prompt wording changes affect expectations
+
+## Observability Impact
+
+- **Signals changed:** The planning prompt now explicitly names `gsd_plan_slice` and `gsd_plan_task` tools, so any agent following the prompt will emit structured tool calls instead of raw file writes — making planning actions observable via tool-call logs rather than implicit file-write patterns.
+- **Inspection surface:** `prompt-contracts.test.ts` assertions referencing the canonical tool names serve as the regression tripwire; if the prompt text drifts back to manual-write instructions, these tests fail immediately.
+- **Failure visibility:** A regression in the prompt wording (removing tool references or re-introducing manual write instructions) is caught by the contract tests before it reaches production prompt surfaces.
