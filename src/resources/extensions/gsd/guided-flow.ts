@@ -511,9 +511,14 @@ export async function showDiscuss(
 
   const state = await deriveState(basePath);
 
-  // Guard: no active milestone
+  // No active milestone — check for pending milestones to discuss instead
   if (!state.activeMilestone) {
-    ctx.ui.notify("No active milestone. Run /gsd to create one first.", "warning");
+    const pendingMilestones = state.registry.filter(m => m.status === "pending");
+    if (pendingMilestones.length === 0) {
+      ctx.ui.notify("No active milestone. Run /gsd to create one first.", "warning");
+      return;
+    }
+    await showDiscussQueuedMilestone(ctx, pi, basePath, pendingMilestones);
     return;
   }
 
@@ -648,6 +653,17 @@ export async function showDiscuss(
       };
     });
 
+    // Offer access to queued milestones when any exist
+    const pendingMilestones = state.registry.filter(m => m.status === "pending");
+    if (pendingMilestones.length > 0) {
+      actions.push({
+        id: "discuss_queued_milestone",
+        label: "Discuss a queued milestone",
+        description: `Refine context for ${pendingMilestones.length} queued milestone(s). Does not affect current execution.`,
+        recommended: false,
+      });
+    }
+
     const choice = await showNextAction(ctx, {
       title: "GSD — Discuss a slice",
       summary: [
@@ -659,6 +675,11 @@ export async function showDiscuss(
     });
 
     if (choice === "not_yet") return;
+
+    if (choice === "discuss_queued_milestone") {
+      await showDiscussQueuedMilestone(ctx, pi, basePath, pendingMilestones);
+      return;
+    }
 
     const chosen = pendingSlices.find(s => s.id === choice);
     if (!chosen) return;
@@ -687,6 +708,79 @@ export async function showDiscuss(
     await ctx.waitForIdle();
     invalidateAllCaches();
   }
+}
+
+// ─── Queued Milestone Discussion ─────────────────────────────────────────────
+
+/**
+ * Show a picker of queued (pending) milestones and dispatch a discuss flow for
+ * the chosen one. Discussing a queued milestone does NOT activate it — it only
+ * refines the CONTEXT.md artifact so it is better prepared when auto-mode
+ * eventually reaches it.
+ */
+async function showDiscussQueuedMilestone(
+  ctx: ExtensionCommandContext,
+  pi: ExtensionAPI,
+  basePath: string,
+  pendingMilestones: Array<{ id: string; title: string; status: string }>,
+): Promise<void> {
+  const actions = pendingMilestones.map((m, i) => {
+    const hasContext = !!resolveMilestoneFile(basePath, m.id, "CONTEXT");
+    const hasDraft = !hasContext && !!resolveMilestoneFile(basePath, m.id, "CONTEXT-DRAFT");
+    const contextStatus = hasContext ? "context ✓" : hasDraft ? "draft context" : "no context yet";
+    return {
+      id: m.id,
+      label: `${m.id}: ${m.title}`,
+      description: `[queued] · ${contextStatus}`,
+      recommended: i === 0,
+    };
+  });
+
+  const choice = await showNextAction(ctx, {
+    title: "GSD — Discuss a queued milestone",
+    summary: [
+      "Select a queued milestone to discuss.",
+      "Discussing will update its context file. It will not be activated.",
+    ],
+    actions,
+    notYetMessage: "Run /gsd discuss when ready.",
+  });
+
+  if (choice === "not_yet") return;
+
+  const chosen = pendingMilestones.find(m => m.id === choice);
+  if (!chosen) return;
+
+  await dispatchDiscussForMilestone(ctx, pi, basePath, chosen.id, chosen.title);
+}
+
+/**
+ * Dispatch the guided-discuss-milestone prompt for a milestone without
+ * setting pendingAutoStart — so discussing a queued milestone does not
+ * implicitly activate it when the session ends.
+ */
+async function dispatchDiscussForMilestone(
+  ctx: ExtensionCommandContext,
+  pi: ExtensionAPI,
+  basePath: string,
+  mid: string,
+  milestoneTitle: string,
+): Promise<void> {
+  const draftFile = resolveMilestoneFile(basePath, mid, "CONTEXT-DRAFT");
+  const draftContent = draftFile ? await loadFile(draftFile) : null;
+  const discussMilestoneTemplates = inlineTemplate("context", "Context");
+  const structuredQuestionsAvailable = pi.getActiveTools().includes("ask_user_questions") ? "true" : "false";
+  const basePrompt = loadPrompt("guided-discuss-milestone", {
+    milestoneId: mid,
+    milestoneTitle,
+    inlinedTemplates: discussMilestoneTemplates,
+    structuredQuestionsAvailable,
+    commitInstruction: buildDocsCommitInstruction(`docs(${mid}): milestone context from discuss`),
+  });
+  const prompt = draftContent
+    ? `${basePrompt}\n\n## Prior Discussion (Draft Seed)\n\n${draftContent}`
+    : basePrompt;
+  await dispatchWorkflow(pi, prompt, "gsd-discuss", ctx, "plan-milestone");
 }
 
 // ─── Smart Entry Point ────────────────────────────────────────────────────────
