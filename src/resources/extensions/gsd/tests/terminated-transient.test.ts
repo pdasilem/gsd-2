@@ -13,7 +13,6 @@ test("#2309: 'terminated' errors should be classified as transient", () => {
   const result = classifyError("terminated");
   assert.equal(isTransient(result), true, "'terminated' should be transient");
   assert.equal(result.kind, "connection", "'terminated' matches connection");
-  assert.equal(result.kind !== "rate-limit", true, "'terminated' is not a rate limit");
   assert.ok("retryAfterMs" in result && result.retryAfterMs > 0, "'terminated' should have a retry delay");
   assert.equal("retryAfterMs" in result && result.retryAfterMs, 15_000, "'terminated' should use 15s backoff");
 });
@@ -63,7 +62,6 @@ test("#2572: 'Expected double-quoted property name' (truncated stream) is transi
   const result = classifyError("Expected double-quoted property name in JSON at position 23 (line 1 column 24)");
   assert.equal(isTransient(result), true, "truncated-stream JSON parse error should be transient");
   assert.equal(result.kind, "stream", "JSON parse errors are stream kind");
-  assert.equal(result.kind !== "rate-limit", true, "not a rate limit");
   assert.equal("retryAfterMs" in result && result.retryAfterMs, 15_000, "should use 15s backoff");
 });
 
