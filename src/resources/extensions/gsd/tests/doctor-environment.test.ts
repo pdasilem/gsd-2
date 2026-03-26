@@ -144,7 +144,7 @@ describe('doctor-environment', async () => {
       const results = runEnvironmentChecks(dir);
       const depsCheck = results.find(r => r.name === "dependencies");
       assert.ok(depsCheck !== undefined, "dependencies check runs");
-      assert.deepStrictEqual(depsCheck!.status, "ok", "npm marker newer than lockfile → not stale");
+      assert.equal(depsCheck!.status, "ok", "npm marker newer than lockfile → not stale");
     }
 
     console.log("\n=== env: yarn marker file newer than lockfile → ok (#1974) ===");
@@ -168,7 +168,7 @@ describe('doctor-environment', async () => {
       const results = runEnvironmentChecks(dir);
       const depsCheck = results.find(r => r.name === "dependencies");
       assert.ok(depsCheck !== undefined, "dependencies check runs");
-      assert.deepStrictEqual(depsCheck!.status, "ok", "yarn marker newer than lockfile → not stale");
+      assert.equal(depsCheck!.status, "ok", "yarn marker newer than lockfile → not stale");
     }
 
     console.log("\n=== env: pnpm marker file newer than lockfile → ok (#1974) ===");
@@ -192,7 +192,7 @@ describe('doctor-environment', async () => {
       const results = runEnvironmentChecks(dir);
       const depsCheck = results.find(r => r.name === "dependencies");
       assert.ok(depsCheck !== undefined, "dependencies check runs");
-      assert.deepStrictEqual(depsCheck!.status, "ok", "pnpm marker newer than lockfile → not stale");
+      assert.equal(depsCheck!.status, "ok", "pnpm marker newer than lockfile → not stale");
     }
 
     console.log("\n=== env: no marker file falls back to dir mtime → stale warning (#1974) ===");
@@ -213,7 +213,7 @@ describe('doctor-environment', async () => {
       const results = runEnvironmentChecks(dir);
       const depsCheck = results.find(r => r.name === "dependencies");
       assert.ok(depsCheck !== undefined, "dependencies check runs");
-      assert.deepStrictEqual(depsCheck!.status, "warning", "no marker + lockfile newer → stale warning");
+      assert.equal(depsCheck!.status, "warning", "no marker + lockfile newer → stale warning");
     }
 
     // ── Env File Check ─────────────────────────────────────────────────
