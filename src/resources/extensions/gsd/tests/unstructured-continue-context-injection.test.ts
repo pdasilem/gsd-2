@@ -9,12 +9,10 @@
  * injected — causing the agent to rebuild everything from scratch and
  * burn ~86k tokens.
  *
- * This test verifies the structural properties of the fix:
- *   1. buildGuidedExecuteContextInjection has a deriveState fallback
- *      that fires when neither regex matches
- *   2. The fallback is phase-gated to "executing" only
- *   3. The fallback checks for activeTask + activeMilestone + activeSlice
- *   4. The fallback calls buildTaskExecutionContextInjection with derived state
+ * This test verifies:
+ *   1. Structural: the fallback exists with phase + intent guards
+ *   2. Behavioral: RESUME_INTENT_PATTERNS matches expected prompts and
+ *      rejects non-resume prompts (control, help, diagnostic, etc.)
  */
 
 import { describe, test } from "node:test";
@@ -29,73 +27,137 @@ const systemContextSource = readFileSync(
   "utf-8",
 );
 
-describe("#3615 — unstructured prompts must inject task context when work is active", () => {
-  // Extract the buildGuidedExecuteContextInjection function body
+// ── Structural tests ────────────────────────────────────────────────
+
+describe("#3615 — structural: fallback exists with correct guards", () => {
   const fnStart = systemContextSource.indexOf("async function buildGuidedExecuteContextInjection(");
   assert.ok(fnStart >= 0, "should find buildGuidedExecuteContextInjection");
-  // Find the closing brace — scan for the next top-level "async function" or end of file
   const fnEnd = systemContextSource.indexOf("\nasync function ", fnStart + 1);
   const fnBody = fnEnd >= 0
     ? systemContextSource.slice(fnStart, fnEnd)
     : systemContextSource.slice(fnStart);
 
   test("has a deriveState fallback after the two regex branches", () => {
-    // The function should call deriveState outside of the resumeMatch block
-    // Count deriveState calls — should be at least 2 (one in resumeMatch, one in fallback)
     const deriveStateCalls = fnBody.match(/deriveState\(basePath\)/g);
     assert.ok(
       deriveStateCalls && deriveStateCalls.length >= 2,
-      `expected >=2 deriveState(basePath) calls in buildGuidedExecuteContextInjection, got ${deriveStateCalls?.length ?? 0}`,
+      `expected >=2 deriveState(basePath) calls, got ${deriveStateCalls?.length ?? 0}`,
     );
   });
 
   test("fallback is phase-gated to executing only", () => {
-    // The fallback must check state.phase === "executing" to avoid misrouting
-    // during replanning, gate evaluation, or other non-execution phases
-    const afterFallbackComment = fnBody.indexOf("// Fallback:");
-    assert.ok(afterFallbackComment >= 0, "should have a fallback comment after the regex branches");
-
-    const fallbackSection = fnBody.slice(afterFallbackComment);
+    const afterFallback = fnBody.indexOf("// Fallback:");
+    assert.ok(afterFallback >= 0, "should have a fallback comment");
+    const fallbackSection = fnBody.slice(afterFallback);
     assert.ok(
       fallbackSection.includes('state.phase === "executing"'),
-      'fallback must be gated on state.phase === "executing" to prevent misrouting in non-execution phases',
+      'fallback must be gated on state.phase === "executing"',
     );
   });
 
-  test("fallback checks for activeTask, activeMilestone, and activeSlice", () => {
-    const afterFallbackComment = fnBody.indexOf("// Fallback:");
-    const fallbackSection = fnBody.slice(afterFallbackComment);
+  test("fallback is intent-gated via RESUME_INTENT_PATTERNS", () => {
+    const afterFallback = fnBody.indexOf("// Fallback:");
+    const fallbackSection = fnBody.slice(afterFallback);
     assert.ok(
-      fallbackSection.includes("state.activeTask") &&
-      fallbackSection.includes("state.activeMilestone") &&
-      fallbackSection.includes("state.activeSlice"),
-      "fallback must check all three state properties before injecting context",
+      fallbackSection.includes("RESUME_INTENT_PATTERNS"),
+      "fallback must check RESUME_INTENT_PATTERNS before deriveState",
     );
   });
 
   test("fallback calls buildTaskExecutionContextInjection with derived state", () => {
-    const afterFallbackComment = fnBody.indexOf("// Fallback:");
-    assert.ok(afterFallbackComment >= 0, "should have a fallback comment after the regex branches");
-
-    const fallbackSection = fnBody.slice(afterFallbackComment);
+    const afterFallback = fnBody.indexOf("// Fallback:");
+    const fallbackSection = fnBody.slice(afterFallback);
     assert.ok(
-      fallbackSection.includes("buildTaskExecutionContextInjection"),
-      "fallback section must call buildTaskExecutionContextInjection",
-    );
-    assert.ok(
+      fallbackSection.includes("buildTaskExecutionContextInjection") &&
       fallbackSection.includes("state.activeMilestone.id") &&
       fallbackSection.includes("state.activeSlice.id") &&
       fallbackSection.includes("state.activeTask.id"),
-      "fallback must pass state-derived IDs to buildTaskExecutionContextInjection",
+      "fallback must call buildTaskExecutionContextInjection with state-derived IDs",
     );
   });
 
-  test("function does NOT return null before the fallback", () => {
-    // There should be exactly one "return null" at the very end, after the fallback
+  test("only one return null at the end", () => {
     const returnNulls = fnBody.match(/return null;/g);
     assert.ok(
       returnNulls && returnNulls.length === 1,
       `expected exactly 1 'return null' (at end after fallback), got ${returnNulls?.length ?? 0}`,
     );
   });
+});
+
+// ── Behavioral tests: RESUME_INTENT_PATTERNS ────────────────────────
+
+describe("#3615 — behavioral: RESUME_INTENT_PATTERNS matches resume prompts", () => {
+  // Extract the regex from source so the test stays in sync
+  const patternMatch = systemContextSource.match(/const RESUME_INTENT_PATTERNS\s*=\s*\/(.+)\/;/);
+  assert.ok(patternMatch, "should find RESUME_INTENT_PATTERNS definition");
+  const pattern = new RegExp(patternMatch[1]);
+
+  // Helper: normalize prompt the same way the production code does
+  const normalize = (s: string) => s.trim().toLowerCase().replace(/[.!?,]+$/g, "");
+
+  const shouldMatch = [
+    "continue",
+    "Continue",
+    "CONTINUE",
+    "continue.",
+    "continue!",
+    "resume",
+    "ok",
+    "OK",
+    "Ok!",
+    "go",
+    "go ahead",
+    "Go ahead.",
+    "proceed",
+    "keep going",
+    "carry on",
+    "next",
+    "yes",
+    "yeah",
+    "yep",
+    "sure",
+    "do it",
+    "let's go",
+    "pick up where you left off",
+    "  continue  ",  // whitespace padded
+  ];
+
+  const shouldNotMatch = [
+    "help",
+    "status",
+    "/gsd auto",
+    "/gsd stats",
+    "what's the plan?",
+    "show me the logs",
+    "abort",
+    "stop",
+    "cancel",
+    "replan this slice",
+    "I think we should change the approach",
+    "can you explain what you just did?",
+    "run the tests",
+    "check the build",
+    "Execute the next task: T01",
+    "what files were changed",
+    "",
+  ];
+
+  for (const prompt of shouldMatch) {
+    test(`matches resume prompt: "${prompt}"`, () => {
+      assert.ok(
+        pattern.test(normalize(prompt)),
+        `expected RESUME_INTENT_PATTERNS to match "${prompt}" (normalized: "${normalize(prompt)}")`,
+      );
+    });
+  }
+
+  for (const prompt of shouldNotMatch) {
+    test(`rejects non-resume prompt: "${prompt}"`, () => {
+      assert.ok(
+        !pattern.test(normalize(prompt)),
+        `expected RESUME_INTENT_PATTERNS to NOT match "${prompt}" (normalized: "${normalize(prompt)}")`,
+      );
+    });
+  }
 });
