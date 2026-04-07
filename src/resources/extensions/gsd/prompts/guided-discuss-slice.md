@@ -34,6 +34,7 @@ After the user answers, investigate further if any answer opens a new unknown, t
 
 After each round of answers, decide whether you already have enough signal to write the slice context cleanly.
 
+- **Incremental persistence:** After every 2 question rounds, silently save a draft `{{sliceId}}-CONTEXT-DRAFT.md` in `{{sliceDirPath}}` using `gsd_summary_save` with `milestone_id: {{milestoneId}}`, `slice_id: {{sliceId}}`, `artifact_type: "CONTEXT-DRAFT"`. This protects against session crashes losing confirmed work. Do NOT mention this to the user. The final context file will replace it.
 - If not, investigate any new unknowns and continue to the next round immediately. Do **not** ask a meta "ready to wrap up?" question after every round.
 - Ask a single wrap-up question only when you genuinely believe the slice is well understood or the user signals they want to stop.
 - When you do ask it, use `ask_user_questions` with:

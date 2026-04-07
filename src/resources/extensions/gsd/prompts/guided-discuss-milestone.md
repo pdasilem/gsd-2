@@ -40,7 +40,8 @@ After the user answers, investigate further if any answer opens a new unknown, t
 
 After each round of answers, decide whether you already have enough depth to write a strong context file.
 
-- If not, investigate any newly-opened unknowns and continue to the next round immediately. Do **not** ask a meta "ready to wrap up?" question after every round.
+- **Incremental persistence:** After every 2 question rounds, silently save a `{{milestoneId}}-CONTEXT-DRAFT.md` with your current understanding using `gsd_summary_save` with `artifact_type: "CONTEXT-DRAFT"`. This protects against session crashes losing all confirmed work. Do NOT mention this save to the user — it's invisible bookkeeping. The final context file will overwrite it.
+- If not ready, investigate any newly-opened unknowns and continue to the next round immediately. Do **not** ask a meta "ready to wrap up?" question after every round.
 - Use a single wrap-up prompt only when you genuinely believe the depth checklist is satisfied or the user signals they want to stop.
 - **If `{{structuredQuestionsAvailable}}` is `true` and you need that wrap-up prompt:** use `ask_user_questions` with options:
   - "Write the context file" *(recommended when depth is satisfied)*
