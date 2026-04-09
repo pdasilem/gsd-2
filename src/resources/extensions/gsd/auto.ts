@@ -118,6 +118,7 @@ import {
   formatTokenCount,
 } from "./metrics.js";
 import { setLogBasePath, logWarning, logError } from "./workflow-logger.js";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync } from "node:fs";
 import { atomicWriteSync } from "./atomic-write.js";
@@ -1248,6 +1249,11 @@ export async function startAuto(
       "info",
     );
     restoreHookState(s.basePath);
+    // Re-sync managed resources on resume so long-lived auto sessions pick up
+    // bundled extension updates before resume-time verification/state logic runs.
+    const agentDir = process.env.GSD_CODING_AGENT_DIR || join(process.env.GSD_HOME || homedir(), ".gsd", "agent");
+    const { initResources } = await import("../../../" + "resource-loader.js");
+    initResources(agentDir);
     // Open the project DB before rebuild/derive so resume uses DB-backed
     // state instead of falling back to stale markdown parsing (#2940).
     await openProjectDbIfPresent(s.basePath);
@@ -1569,4 +1575,3 @@ export {
   buildLoopRemediationSteps,
 } from "./auto-recovery.js";
 export { resolveExpectedArtifactPath } from "./auto-artifact-paths.js";
-
