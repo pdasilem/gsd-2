@@ -33,10 +33,11 @@ test("auto.ts resume uses GSD_PKG_ROOT for resource-loader import, not bare rela
     "auto.ts resource-loader import must use the computed resourceLoaderPath variable, not a hardcoded relative path",
   );
 
-  // The resourceLoaderPath must be constructed from GSD_PKG_ROOT
+  // The resourceLoaderPath must be constructed from GSD_PKG_ROOT via pathToFileURL
+  // (raw filesystem paths break on Windows with ERR_UNSUPPORTED_ESM_URL_SCHEME)
   assert.ok(
-    autoSrc.includes('join(pkgRoot, "dist", "resource-loader.js")'),
-    "auto.ts must construct resourceLoaderPath from pkgRoot + dist/resource-loader.js",
+    autoSrc.includes("pathToFileURL(join(pkgRoot,"),
+    "auto.ts must convert the constructed path to a file URL for cross-platform import()",
   );
 });
 

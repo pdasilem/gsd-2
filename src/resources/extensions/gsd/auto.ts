@@ -126,6 +126,7 @@ import {
 import { setLogBasePath, logWarning, logError } from "./workflow-logger.js";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync } from "node:fs";
 import { atomicWriteSync } from "./atomic-write.js";
 import {
@@ -1341,7 +1342,7 @@ export async function startAuto(
     const agentDir = process.env.GSD_CODING_AGENT_DIR || join(process.env.GSD_HOME || homedir(), ".gsd", "agent");
     const pkgRoot = process.env.GSD_PKG_ROOT;
     const resourceLoaderPath = pkgRoot
-      ? join(pkgRoot, "dist", "resource-loader.js")
+      ? pathToFileURL(join(pkgRoot, "dist", "resource-loader.js")).href
       : new URL("../../../resource-loader.js", import.meta.url).href;
     const { initResources } = await import(resourceLoaderPath);
     initResources(agentDir);
