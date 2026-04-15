@@ -174,6 +174,14 @@ If the \`capture_thought\` tool is available, call it once for each extracted it
 - source: {artifact filename}
 
 If \`capture_thought\` is not available, skip this step silently — do not report an error.
+
+---
+
+## Rebuild Knowledge Graph
+
+After writing LEARNINGS.md, call the \`gsd_graph\` tool with \`{ "mode": "build" }\` to rebuild the knowledge graph so the new learnings are immediately queryable by future milestone prompts.
+
+If the \`gsd_graph\` tool is not available, skip this step silently.
 `;
 }
 
