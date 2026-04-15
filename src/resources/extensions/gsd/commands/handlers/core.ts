@@ -4,7 +4,7 @@ import type { GSDState } from "../../types.js";
 
 import { computeProgressScore, formatProgressLine } from "../../progress-score.js";
 import { loadEffectiveGSDPreferences, getGlobalGSDPreferencesPath, getProjectGSDPreferencesPath } from "../../preferences.js";
-import { ensurePreferencesFile, handlePrefs, handlePrefsMode, handlePrefsWizard } from "../../commands-prefs-wizard.js";
+import { ensurePreferencesFile, handlePrefs, handlePrefsMode, handlePrefsWizard, handleLanguage } from "../../commands-prefs-wizard.js";
 import { runEnvironmentChecks } from "../../doctor-environment.js";
 import { deriveState } from "../../state.js";
 import { handleCmux } from "../../commands-cmux.js";
@@ -393,6 +393,10 @@ export async function handleCoreCommand(
   }
   if (trimmed === "prefs" || trimmed.startsWith("prefs ")) {
     await handlePrefs(trimmed.replace(/^prefs\s*/, "").trim(), ctx);
+    return true;
+  }
+  if (trimmed === "language" || trimmed.startsWith("language ")) {
+    await handleLanguage(trimmed.replace(/^language\s*/, "").trim(), ctx);
     return true;
   }
   if (trimmed === "cmux" || trimmed.startsWith("cmux ")) {
