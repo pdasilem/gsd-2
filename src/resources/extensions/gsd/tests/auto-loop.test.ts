@@ -313,6 +313,42 @@ test("runUnit re-applies the selected unit model after newSession before dispatc
   assert.equal(pi.calls.length, 1);
 });
 
+test("runUnit cancels before dispatch when model restore fails after newSession", async () => {
+  _resetPendingResolve();
+
+  const notifications: Array<{ message: string; level: string }> = [];
+  const ctx = makeMockCtx();
+  ctx.ui.notify = (message: string, level: string) => {
+    notifications.push({ message, level });
+  };
+
+  const pi = makeMockPi();
+  pi.setModel = async (...args: unknown[]) => {
+    pi.setModelCalls.push(args);
+    return false;
+  };
+
+  const s = makeMockSession();
+  s.currentUnitModel = { provider: "openai-codex", id: "gpt-5.4" };
+
+  const result = await runUnit(ctx, pi, s, "task", "T01", "prompt");
+
+  assert.equal(result.status, "cancelled");
+  assert.equal(result.errorContext?.category, "session-failed");
+  assert.match(
+    result.errorContext?.message ?? "",
+    /Failed to restore configured model openai-codex\/gpt-5\.4 after session creation/,
+  );
+  assert.equal(pi.setModelCalls.length, 1);
+  assert.equal(pi.calls.length, 0, "unit must not dispatch on the session default model");
+  assert.deepEqual(notifications, [
+    {
+      message: "Failed to restore configured model openai-codex/gpt-5.4 after session creation. Cancelling unit before dispatch.",
+      level: "warning",
+    },
+  ]);
+});
+
 // ─── Structural assertions ───────────────────────────────────────────────────
 
 test("auto-loop.ts exports autoLoop, runUnit, resolveAgentEnd", async () => {
