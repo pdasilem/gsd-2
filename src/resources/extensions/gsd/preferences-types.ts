@@ -116,6 +116,7 @@ export const KNOWN_PREFERENCE_KEYS = new Set<string>([
   "discuss_depth",
   "flat_rate_providers",
   "language",
+  "context_window_override",
 ]);
 
 /** Canonical list of all dispatch unit types. */
@@ -291,6 +292,13 @@ export interface GSDPreferences {
   uok?: UokPreferences;
   /** Per-model capability overrides. Deep-merged with built-in profiles for capability-aware routing (ADR-004). */
   modelOverrides?: Record<string, { capabilities?: Partial<ModelCapabilities> }>;
+  /**
+   * Override executor context window (in tokens) for prompt budget sizing.
+   * Useful when the configured model registry can't resolve the runtime limit
+   * — e.g. local llama.cpp/lemonade servers where the server-side n_ctx is
+   * smaller than the model's advertised window. Issue #4435.
+   */
+  context_window_override?: number;
   context_management?: ContextManagementConfig;
   token_profile?: TokenProfile;
   phases?: PhaseSkipPreferences;

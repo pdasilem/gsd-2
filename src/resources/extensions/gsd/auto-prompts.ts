@@ -38,11 +38,52 @@ import { inlineGraphSubgraph } from "./graph-context.js";
 
 // ─── Preamble Cap ─────────────────────────────────────────────────────────────
 
+/**
+ * Historical static ceiling for the preamble cap. Kept as an upper bound even
+ * after context-window-aware sizing so large-window users don't suddenly see
+ * 10× looser caps than before. Small-window users get a tighter cap derived
+ * from their configured executor window.
+ */
 const MAX_PREAMBLE_CHARS = 30_000;
 
+/**
+ * Resolve prompt budgets from the configured executor context window.
+ *
+ * The prompt builders here don't have access to the runtime model registry
+ * (they're called from many non-ctx sites), so `resolveExecutorContextWindow`
+ * is fed the user-configurable `context_window_override` preference as the
+ * `sessionContextWindow` fallback. That preference exists specifically to
+ * cover small-window local models (e.g. 32K lemonade/llama.cpp servers) whose
+ * n_ctx is not discoverable through the model registry. Issue #4435.
+ */
+function resolvePromptBudgets(): ReturnType<typeof computeBudgets> {
+  try {
+    const prefs = loadEffectiveGSDPreferences();
+    const sessionWindow = prefs?.preferences.context_window_override;
+    const windowTokens = resolveExecutorContextWindow(undefined, prefs?.preferences, sessionWindow);
+    return computeBudgets(windowTokens);
+  } catch (e) {
+    logWarning("prompt", `resolvePromptBudgets failed: ${(e as Error).message}`);
+    return computeBudgets(200_000);
+  }
+}
+
+/**
+ * Character budget for dependency/prior slice summaries injected into dispatch
+ * prompts. Scales with the executor's configured context window (issue #4435).
+ */
+function resolveSummaryBudgetChars(): number {
+  return resolvePromptBudgets().summaryBudgetChars;
+}
+
 function capPreamble(preamble: string): string {
-  if (preamble.length <= MAX_PREAMBLE_CHARS) return preamble;
-  return truncateAtSectionBoundary(preamble, MAX_PREAMBLE_CHARS).content;
+  // Cap inlined context at min(historical 30K ceiling, scaled inline budget).
+  // The ceiling preserves pre-fix behavior for large-window users; the scaled
+  // budget tightens the cap for small-window users whose true safe limit is
+  // below 30K. `computeBudgets` allocates 40% of total chars to inline context.
+  const budget = Math.min(MAX_PREAMBLE_CHARS, resolvePromptBudgets().inlineContextBudgetChars);
+  if (preamble.length <= budget) return preamble;
+  return truncateAtSectionBoundary(preamble, budget).content;
 }
 
 // ─── Executor Constraints ─────────────────────────────────────────────────────
@@ -1182,7 +1223,7 @@ export async function buildResearchSlicePrompt(
 
   inlined.push(inlineTemplate("research", "Research"));
 
-  const depContent = await inlineDependencySummaries(mid, sid, base);
+  const depContent = await inlineDependencySummaries(mid, sid, base, resolveSummaryBudgetChars());
   const activeOverrides = await loadActiveOverrides(base);
   const overridesInline = formatOverridesSection(activeOverrides);
   if (overridesInline) inlined.unshift(overridesInline);
@@ -1264,7 +1305,7 @@ export async function buildPlanSlicePrompt(
     inlined.push(inlineTemplate("task-plan", "Task Plan"));
   }
 
-  const depContent = await inlineDependencySummaries(mid, sid, base);
+  const depContent = await inlineDependencySummaries(mid, sid, base, resolveSummaryBudgetChars());
   const planActiveOverrides = await loadActiveOverrides(base);
   const planOverridesInline = formatOverridesSection(planActiveOverrides);
   if (planOverridesInline) inlined.unshift(planOverridesInline);
