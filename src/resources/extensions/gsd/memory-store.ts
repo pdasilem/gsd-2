@@ -15,6 +15,8 @@ import {
   markMemoryUnitProcessed,
   decayMemoriesBefore,
   supersedeLowestRankedMemories,
+  deleteMemoryEmbedding,
+  deleteMemoryRelationsFor,
 } from './gsd-db.js';
 import { createMemoryRelation, isValidRelation } from './memory-relations.js';
 
@@ -589,11 +591,12 @@ export function markUnitProcessed(unitKey: string, activityFile: string): boolea
 /**
  * Reduce confidence for memories not updated within the last N processed units.
  * "Stale" = updated_at is older than the Nth most recent processed_at.
+ * Returns the number of decayed memory IDs for observability.
  */
-export function decayStaleMemories(thresholdUnits = 20): void {
-  if (!isDbAvailable()) return;
+export function decayStaleMemories(thresholdUnits = 20): string[] {
+  if (!isDbAvailable()) return [];
   const adapter = _getAdapter();
-  if (!adapter) return;
+  if (!adapter) return [];
 
   try {
     // Find the timestamp of the Nth most recent processed unit (read-only SELECT)
@@ -603,17 +606,24 @@ export function decayStaleMemories(thresholdUnits = 20): void {
        LIMIT 1 OFFSET :offset`,
     ).get({ ':offset': thresholdUnits - 1 });
 
-    if (!row) return; // not enough processed units yet
+    if (!row) return []; // not enough processed units yet
 
     const cutoff = row['processed_at'] as string;
+    const affected = adapter.prepare(
+      `SELECT id FROM memories
+       WHERE superseded_by IS NULL AND updated_at < :cutoff AND confidence > 0.1`,
+    ).all({ ':cutoff': cutoff }).map((r) => r['id'] as string);
+
     decayMemoriesBefore(cutoff, new Date().toISOString());
+    return affected;
   } catch {
-    // non-fatal
+    return [];
   }
 }
 
 /**
- * Supersede lowest-ranked memories when count exceeds cap.
+ * Supersede lowest-ranked memories when count exceeds cap. Cascades to the
+ * embedding and relation rows so those tables don't grow unboundedly.
  */
 export function enforceMemoryCap(max = 50): void {
   if (!isDbAvailable()) return;
@@ -628,7 +638,21 @@ export function enforceMemoryCap(max = 50): void {
     if (count <= max) return;
 
     const excess = count - max;
+    // Capture the about-to-be-superseded IDs first so we can cascade cleanup.
+    const victims = adapter.prepare(
+      `SELECT id FROM memories
+       WHERE superseded_by IS NULL
+       ORDER BY (confidence * (1.0 + hit_count * 0.1)) ASC
+       LIMIT :limit`,
+    ).all({ ':limit': excess }).map((row) => row['id'] as string);
+
     supersedeLowestRankedMemories(excess, new Date().toISOString());
+
+    if (victims.length === 0) return;
+    for (const id of victims) {
+      try { deleteMemoryEmbedding(id); } catch { /* non-fatal */ }
+      try { deleteMemoryRelationsFor(id); } catch { /* non-fatal */ }
+    }
   } catch {
     // non-fatal
   }

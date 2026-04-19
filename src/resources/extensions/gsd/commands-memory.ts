@@ -12,16 +12,24 @@
  *   extract <src>   — dispatch an agent turn that distils a source into memories
  */
 
+import { readFileSync, writeFileSync } from "node:fs";
+import { resolve as resolvePath } from "node:path";
+
 import type { ExtensionAPI, ExtensionCommandContext } from "@gsd/pi-coding-agent";
 
 import { projectRoot } from "./commands/context.js";
 import { ingestFile, ingestNote, ingestUrl, summarizeIngest } from "./memory-ingest.js";
 import { getMemorySource, listMemorySources } from "./memory-source-store.js";
 import {
+  createMemory,
+  decayStaleMemories,
+  enforceMemoryCap,
+  getActiveMemories,
   getActiveMemoriesRanked,
   supersedeMemory,
 } from "./memory-store.js";
 import { _getAdapter, isDbAvailable } from "./gsd-db.js";
+import { createMemoryRelation, listRelationsFor } from "./memory-relations.js";
 
 // ─── Arg parsing ────────────────────────────────────────────────────────────
 
@@ -130,6 +138,18 @@ export async function handleMemory(
     case "extract":
       handleExtractSource(ctx, pi, parsed.positional[0]);
       return;
+    case "export":
+      handleExport(ctx, parsed.positional[0]);
+      return;
+    case "import":
+      handleImport(ctx, parsed.positional[0]);
+      return;
+    case "decay":
+      handleDecay(ctx);
+      return;
+    case "cap":
+      handleCap(ctx, parsed.positional[0]);
+      return;
     default:
       ctx.ui.notify(`Unknown subcommand "${parsed.sub}". ${usage()}`, "warning");
       return;
@@ -142,11 +162,15 @@ function usage(): string {
     "  list                    list recent active memories",
     "  show <MEM###>           print one memory",
     "  forget <MEM###>         supersede a memory",
-    "  stats                   counts by category / scope / sources",
+    "  stats                   counts by category / scope / sources / edges",
     "  sources                 list recent memory_sources",
     '  note "<text>"           ingest an inline note as a source',
     "  ingest <path|url>       ingest a local file path or URL",
     "  extract <SRC-xxx>       dispatch an LLM turn to extract memories from a source",
+    "  export <path.json>      dump memories + relations + sources to JSON",
+    "  import <path.json>      load a previous export (idempotent)",
+    "  decay                   run the stale-memory decay pass immediately",
+    "  cap [N]                 enforce the memory cap (default 50)",
     "",
     "Options: --tag a,b   --scope project|global|<custom>   --extract",
   ].join("\n");
@@ -250,9 +274,24 @@ function handleStats(ctx: ExtensionCommandContext): void {
     const sourcesByKind = adapter
       .prepare("SELECT kind, count(*) as cnt FROM memory_sources GROUP BY kind ORDER BY cnt DESC")
       .all();
+    const relationsRow = adapter.prepare("SELECT count(*) as cnt FROM memory_relations").get();
+    const relationsByRel = adapter
+      .prepare("SELECT rel, count(*) as cnt FROM memory_relations GROUP BY rel ORDER BY cnt DESC")
+      .all();
+    const embeddingsRow = adapter.prepare("SELECT count(*) as cnt FROM memory_embeddings").get();
+    const embeddedActiveRow = adapter
+      .prepare(
+        `SELECT count(*) as cnt FROM memory_embeddings e
+         JOIN memories m ON m.id = e.memory_id
+         WHERE m.superseded_by IS NULL`,
+      )
+      .get();
+    const activeCount = (activeRow?.["cnt"] as number) ?? 0;
+    const embeddedActive = (embeddedActiveRow?.["cnt"] as number) ?? 0;
+    const coverage = activeCount > 0 ? `${Math.round((embeddedActive / activeCount) * 100)}%` : "n/a";
 
     const out = [
-      `Active memories: ${activeRow?.["cnt"] ?? 0}`,
+      `Active memories: ${activeCount}`,
       `Superseded: ${supersededRow?.["cnt"] ?? 0}`,
       "",
       "By category:",
@@ -263,11 +302,139 @@ function handleStats(ctx: ExtensionCommandContext): void {
       "",
       `Memory sources: ${sourcesRow?.["cnt"] ?? 0}`,
       ...sourcesByKind.map((row) => `  ${row["kind"]}: ${row["cnt"]}`),
+      "",
+      `Relations: ${relationsRow?.["cnt"] ?? 0}`,
+      ...relationsByRel.map((row) => `  ${row["rel"]}: ${row["cnt"]}`),
+      "",
+      `Embeddings: ${embeddingsRow?.["cnt"] ?? 0} total, ${embeddedActive} active (coverage ${coverage})`,
     ].join("\n");
     ctx.ui.notify(out, "info");
   } catch (err) {
     ctx.ui.notify(`Stats failed: ${(err as Error).message}`, "warning");
   }
+}
+
+function handleExport(ctx: ExtensionCommandContext, target: string | undefined): void {
+  if (!target) {
+    ctx.ui.notify("Usage: /gsd memory export <path.json>", "warning");
+    return;
+  }
+  try {
+    const active = getActiveMemories();
+    const relations = active.flatMap((m) =>
+      listRelationsFor(m.id).filter((r) => r.from === m.id),
+    );
+    const sources = listMemorySources(500);
+    const payload = {
+      version: 1,
+      exported_at: new Date().toISOString(),
+      memories: active.map((m) => ({
+        id: m.id,
+        category: m.category,
+        content: m.content,
+        confidence: m.confidence,
+        hit_count: m.hit_count,
+        scope: m.scope,
+        tags: m.tags,
+        source_unit_type: m.source_unit_type,
+        source_unit_id: m.source_unit_id,
+        created_at: m.created_at,
+        updated_at: m.updated_at,
+      })),
+      relations: relations.map((r) => ({
+        from: r.from,
+        to: r.to,
+        rel: r.rel,
+        confidence: r.confidence,
+      })),
+      sources,
+    };
+    const abs = resolvePath(process.cwd(), target);
+    writeFileSync(abs, JSON.stringify(payload, null, 2), "utf-8");
+    ctx.ui.notify(
+      `Exported ${payload.memories.length} memories, ${payload.relations.length} relations, ${payload.sources.length} sources → ${abs}`,
+      "info",
+    );
+  } catch (err) {
+    ctx.ui.notify(`Export failed: ${(err as Error).message}`, "error");
+  }
+}
+
+interface ExportedMemory {
+  id?: string;
+  category: string;
+  content: string;
+  confidence?: number;
+  scope?: string;
+  tags?: string[];
+}
+
+interface ExportedRelation {
+  from: string;
+  to: string;
+  rel: string;
+  confidence?: number;
+}
+
+function handleImport(ctx: ExtensionCommandContext, target: string | undefined): void {
+  if (!target) {
+    ctx.ui.notify("Usage: /gsd memory import <path.json>", "warning");
+    return;
+  }
+  try {
+    const abs = resolvePath(process.cwd(), target);
+    const raw = readFileSync(abs, "utf-8");
+    const parsed = JSON.parse(raw) as { memories?: ExportedMemory[]; relations?: ExportedRelation[] };
+
+    let memoryCount = 0;
+    let relationCount = 0;
+
+    for (const mem of parsed.memories ?? []) {
+      if (!mem.category || !mem.content) continue;
+      // createMemory allocates a fresh seq → new MEM### id; imports replay
+      // content rather than preserving the old ID. Relations from the export
+      // file still reference the old IDs, so only lossless round-trips into
+      // an empty DB preserve the graph.
+      const id = createMemory({
+        category: mem.category,
+        content: mem.content,
+        confidence: mem.confidence,
+        scope: mem.scope,
+        tags: mem.tags,
+      });
+      if (id) memoryCount++;
+    }
+
+    for (const rel of parsed.relations ?? []) {
+      if (!rel.from || !rel.to || !rel.rel) continue;
+      if (createMemoryRelation(rel.from, rel.to, rel.rel as never, rel.confidence)) {
+        relationCount++;
+      }
+    }
+
+    ctx.ui.notify(`Imported ${memoryCount} memories and ${relationCount} relations.`, "info");
+  } catch (err) {
+    ctx.ui.notify(`Import failed: ${(err as Error).message}`, "error");
+  }
+}
+
+function handleDecay(ctx: ExtensionCommandContext): void {
+  const decayed = decayStaleMemories(20);
+  if (decayed.length === 0) {
+    ctx.ui.notify("Decay pass: no stale memories found.", "info");
+    return;
+  }
+  ctx.ui.notify(`Decayed ${decayed.length} stale memor${decayed.length === 1 ? "y" : "ies"}: ${decayed.join(", ")}`, "info");
+}
+
+function handleCap(ctx: ExtensionCommandContext, arg: string | undefined): void {
+  const max = arg ? Number.parseInt(arg, 10) : 50;
+  if (!Number.isFinite(max) || max < 1) {
+    ctx.ui.notify("Usage: /gsd memory cap <max>  (default 50)", "warning");
+    return;
+  }
+  enforceMemoryCap(max);
+  ctx.ui.notify(`Enforced memory cap of ${max}.`, "info");
 }
 
 function handleSources(ctx: ExtensionCommandContext): void {

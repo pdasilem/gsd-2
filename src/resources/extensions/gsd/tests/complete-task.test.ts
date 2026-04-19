@@ -109,9 +109,9 @@ console.log('\n=== complete-task: schema v5 migration ===');
 
   const adapter = _getAdapter()!;
 
-  // Verify schema version is current (v17 with ADR-011 P2 escalation columns)
+  // Verify schema version is current (v20 — memory system Phase 4 relations)
   const versionRow = adapter.prepare('SELECT MAX(version) as v FROM schema_version').get();
-  assertEq(versionRow?.['v'], 17, 'schema version should be 17');
+  assertEq(versionRow?.['v'], 20, 'schema version should be 20');
 
   // Verify all 4 new tables exist
   const tables = adapter.prepare(
