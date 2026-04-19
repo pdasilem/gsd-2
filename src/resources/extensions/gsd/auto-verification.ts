@@ -293,6 +293,25 @@ export async function runPostUnitVerification(
         ? prefs.verification_max_retries
         : 2;
 
+    // Emit Layer 2 verify_result event (post-plan hook recommendation).
+    try {
+      const { emitVerifyResult } = await import("./hook-emitter.js");
+      await emitVerifyResult({
+        passed: result.passed,
+        failures: result.checks
+          .filter((c) => c.exitCode !== 0)
+          .map((c) => ({
+            kind: "gate" as const,
+            message: `${c.command} exited ${c.exitCode}${c.stderr ? `: ${c.stderr.slice(0, 200)}` : ""}`,
+          })),
+        unitType: s.currentUnit.type,
+        unitId: s.currentUnit.id,
+        cwd: s.basePath,
+      });
+    } catch {
+      // Non-fatal — hook emission must not break verification.
+    }
+
     if (result.checks.length > 0) {
       const passCount = result.checks.filter((c) => c.exitCode === 0).length;
       const total = result.checks.length;

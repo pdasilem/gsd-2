@@ -621,6 +621,19 @@ export class AgentSession {
 			await this._extensionRunner.emit({ type: "agent_start" });
 		} else if (event.type === "agent_end") {
 			await this._extensionRunner.emit({ type: "agent_end", messages: event.messages });
+			// `stop` fires on true quiescence: the agent cleanly completed and is now
+			// waiting for the user. Use the last assistant message's stopReason to
+			// distinguish clean completion from error/cancellation.
+			const last = event.messages[event.messages.length - 1];
+			const stopReason: "completed" | "cancelled" | "error" | "blocked" =
+				last?.role === "assistant"
+					? last.stopReason === "aborted"
+						? "cancelled"
+						: last.stopReason === "error"
+							? "error"
+							: "completed"
+					: "completed";
+			await this._extensionRunner.emitStop({ reason: stopReason, lastMessage: last });
 		} else if (event.type === "turn_start") {
 			const extensionEvent: TurnStartEvent = {
 				type: "turn_start",

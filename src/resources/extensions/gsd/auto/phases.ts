@@ -1131,6 +1131,19 @@ export async function runGuards(
       s.lastBudgetAlertLevel =
         newBudgetAlertLevel as AutoSession["lastBudgetAlertLevel"];
 
+      // Emit Layer 2 budget_threshold event (post-plan hook recommendation).
+      // Extensions / Layer 0 shell hooks may return an action override.
+      try {
+        const { emitBudgetThreshold } = await import("../hook-emitter.js");
+        await emitBudgetThreshold({
+          fraction: budgetPct,
+          spent: totalCost,
+          limit: budgetCeiling,
+        });
+      } catch {
+        // Non-fatal — hook emission must not break the auto loop.
+      }
+
       if (threshold.pct === 100 && budgetEnforcementAction !== "none") {
         // 100% — special enforcement logic (halt/pause/warn)
         const msg = `Budget ceiling ${deps.formatCost(budgetCeiling)} reached (spent ${deps.formatCost(totalCost)}).`;

@@ -66,6 +66,13 @@ export function registerGsdExtension(pi: ExtensionAPI): void {
   registerWorktreeCommand(pi);
   registerExitCommand(pi);
 
+  // Wire the Layer 2 event emitter bridge so deeply-nested GSD code can emit
+  // extension events (git lifecycle, verify, budget, milestone, unit) without
+  // threading `pi` through every call site.
+  import("../hook-emitter.js").then(({ setHookEmitter }) => setHookEmitter(pi)).catch(() => {
+    // Non-fatal — emitters simply become no-ops if this import fails.
+  });
+
   installEpipeGuard();
 
   // Ecosystem handlers captured by the GSDExtensionAPI wrapper for the
