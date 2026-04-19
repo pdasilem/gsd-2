@@ -13,9 +13,10 @@ import { _getAdapter, isDbAvailable } from "../gsd-db.js";
 import {
   createMemory,
   getActiveMemoriesRanked,
+  queryMemoriesRanked,
   reinforceMemory,
 } from "../memory-store.js";
-import type { Memory } from "../memory-store.js";
+import type { Memory, RankedMemory } from "../memory-store.js";
 
 // ─── Shared result shape (matches tools/workflow-tool-executors.ts) ─────────
 
@@ -137,7 +138,9 @@ export interface MemoryQueryHit {
   confidence: number;
   hit_count: number;
   score: number;
-  reason: "keyword" | "ranked";
+  reason: "keyword" | "semantic" | "both" | "ranked";
+  keyword_rank: number | null;
+  semantic_rank: number | null;
 }
 
 export function executeMemoryQuery(params: MemoryQueryParams): ToolExecutionResult {
@@ -146,34 +149,73 @@ export function executeMemoryQuery(params: MemoryQueryParams): ToolExecutionResu
   const query = (params.query ?? "").trim();
   const k = clampTopK(params.k, 10);
   const includeSuperseded = params.include_superseded === true;
-  const category = params.category?.trim().toLowerCase() || null;
-  const scopeFilter = params.scope?.trim() || null;
-  const tagFilter = params.tag?.trim().toLowerCase() || null;
-
-  const terms = tokenizeQuery(query);
-  const hits: MemoryQueryHit[] = [];
+  const category = params.category?.trim().toLowerCase() || undefined;
+  const scopeFilter = params.scope?.trim() || undefined;
+  const tagFilter = params.tag?.trim().toLowerCase() || undefined;
 
   try {
-    const ranked = getActiveMemoriesRanked(200);
-    const candidates: Memory[] = includeSuperseded ? includeSupersededMemories(ranked) : ranked;
-
-    for (const m of candidates) {
-      if (category && m.category.toLowerCase() !== category) continue;
-      if (scopeFilter && m.scope !== scopeFilter) continue;
-      if (tagFilter && !m.tags.map((t) => t.toLowerCase()).includes(tagFilter)) continue;
-      const matchScore = terms.length === 0 ? 1 : keywordScore(m.content, terms);
-      if (terms.length > 0 && matchScore === 0) continue;
-      const rankScore = m.confidence * (1 + m.hit_count * 0.1);
-      hits.push({
-        id: m.id,
-        category: m.category,
-        content: m.content,
-        confidence: m.confidence,
-        hit_count: m.hit_count,
-        score: matchScore * rankScore,
-        reason: terms.length > 0 ? "keyword" : "ranked",
+    let ranked: RankedMemory[] = [];
+    if (query) {
+      ranked = queryMemoriesRanked({
+        query,
+        k,
+        category,
+        scope: scopeFilter,
+        tag: tagFilter,
+        include_superseded: includeSuperseded,
       });
+    } else {
+      const candidates: Memory[] = includeSuperseded
+        ? includeSupersededMemories(getActiveMemoriesRanked(200))
+        : getActiveMemoriesRanked(200);
+      ranked = candidates
+        .filter((m) => {
+          if (category && m.category.toLowerCase() !== category) return false;
+          if (scopeFilter && m.scope !== scopeFilter) return false;
+          if (tagFilter && !m.tags.map((t) => t.toLowerCase()).includes(tagFilter)) return false;
+          return true;
+        })
+        .slice(0, k)
+        .map((memory) => ({
+          memory,
+          score: memory.confidence * (1 + memory.hit_count * 0.1),
+          keywordRank: null,
+          semanticRank: null,
+          confidenceBoost: memory.confidence * (1 + memory.hit_count * 0.1),
+          reason: "ranked" as const,
+        }));
     }
+
+    const hits: MemoryQueryHit[] = ranked.map((r) => ({
+      id: r.memory.id,
+      category: r.memory.category,
+      content: r.memory.content,
+      confidence: r.memory.confidence,
+      hit_count: r.memory.hit_count,
+      score: r.score,
+      reason: r.reason,
+      keyword_rank: r.keywordRank,
+      semantic_rank: r.semanticRank,
+    }));
+
+    if (params.reinforce_hits) {
+      for (const h of hits) reinforceMemory(h.id);
+    }
+
+    const summary = hits.length === 0
+      ? "No matching memories."
+      : hits.map((h) => `- [${h.id}] (${h.category}) ${h.content}`).join("\n");
+
+    return {
+      content: [{ type: "text", text: summary }],
+      details: {
+        operation: "memory_query",
+        query,
+        k,
+        returned: hits.length,
+        hits,
+      },
+    };
   } catch (err) {
     return {
       content: [{ type: "text", text: `Error: memory query failed: ${(err as Error).message}` }],
@@ -181,28 +223,6 @@ export function executeMemoryQuery(params: MemoryQueryParams): ToolExecutionResu
       isError: true,
     };
   }
-
-  hits.sort((a, b) => b.score - a.score);
-  const topHits = hits.slice(0, k);
-
-  if (params.reinforce_hits) {
-    for (const h of topHits) reinforceMemory(h.id);
-  }
-
-  const summary = topHits.length === 0
-    ? "No matching memories."
-    : topHits.map((h) => `- [${h.id}] (${h.category}) ${h.content}`).join("\n");
-
-  return {
-    content: [{ type: "text", text: summary }],
-    details: {
-      operation: "memory_query",
-      query,
-      k,
-      returned: topHits.length,
-      hits: topHits,
-    },
-  };
 }
 
 function clampTopK(value: unknown, fallback: number): number {
@@ -210,24 +230,6 @@ function clampTopK(value: unknown, fallback: number): number {
   if (value < 1) return 1;
   if (value > 50) return 50;
   return Math.floor(value);
-}
-
-function tokenizeQuery(query: string): string[] {
-  return query
-    .toLowerCase()
-    .split(/[^a-z0-9_]+/)
-    .filter((t) => t.length >= 2);
-}
-
-function keywordScore(content: string, terms: string[]): number {
-  const lower = content.toLowerCase();
-  let score = 0;
-  for (const term of terms) {
-    const idx = lower.indexOf(term);
-    if (idx === -1) continue;
-    score += 1 + (term.length >= 5 ? 0.5 : 0);
-  }
-  return score;
 }
 
 function includeSupersededMemories(rankedActive: Memory[]): Memory[] {

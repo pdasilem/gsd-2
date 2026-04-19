@@ -113,10 +113,26 @@ export async function buildBeforeAgentStartResult(
 
   let memoryBlock = "";
   try {
-    const { formatMemoriesForPrompt, getActiveMemoriesRanked } = await import("../memory-store.js");
-    const memories = getActiveMemoriesRanked(30);
-    if (memories.length > 0) {
-      const formatted = formatMemoriesForPrompt(memories, 2000);
+    const { formatMemoriesForPrompt, getActiveMemoriesRanked, queryMemoriesRanked } = await import("../memory-store.js");
+
+    // Always-on "critical" set — small, stable memories that belong in every
+    // turn (gotchas, environment, conventions). Ranked by the existing score.
+    const CRITICAL_CATEGORIES = new Set(["gotcha", "environment", "convention"]);
+    const allRanked = getActiveMemoriesRanked(60);
+    const critical = allRanked.filter((m) => CRITICAL_CATEGORIES.has(m.category)).slice(0, 5);
+    const criticalIds = new Set(critical.map((m) => m.id));
+
+    // Prompt-relevance set — hybrid FTS5 + (future) semantic retrieval.
+    let relevant: typeof allRanked = [];
+    const userPrompt = (event.prompt ?? "").trim();
+    if (userPrompt) {
+      const hits = queryMemoriesRanked({ query: userPrompt, k: 10 });
+      relevant = hits.map((h) => h.memory).filter((m) => !criticalIds.has(m.id));
+    }
+
+    const merged = [...critical, ...relevant];
+    if (merged.length > 0) {
+      const formatted = formatMemoriesForPrompt(merged, 2000);
       if (formatted) {
         memoryBlock = `\n\n${formatted}`;
       }

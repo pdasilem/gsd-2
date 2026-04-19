@@ -180,7 +180,7 @@ function openRawDb(path: string): unknown {
   return new Database(path);
 }
 
-const SCHEMA_VERSION = 18;
+const SCHEMA_VERSION = 19;
 
 function indexExists(db: DbAdapter, name: string): boolean {
   return !!db.prepare(
@@ -308,6 +308,20 @@ function initSchema(db: DbAdapter, fileBacked: boolean): void {
         tags TEXT NOT NULL DEFAULT '[]'
       )
     `);
+
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS memory_embeddings (
+        memory_id TEXT PRIMARY KEY,
+        model TEXT NOT NULL,
+        dim INTEGER NOT NULL,
+        vector BLOB NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    `);
+
+    // FTS5 virtual table mirroring memories.content for fast keyword search.
+    // Optional — if the SQLite build lacks FTS5, we fall back to LIKE scans.
+    tryCreateMemoriesFts(db);
 
     db.exec(`
       CREATE TABLE IF NOT EXISTS milestones (
@@ -582,6 +596,56 @@ function initSchema(db: DbAdapter, fileBacked: boolean): void {
 function columnExists(db: DbAdapter, table: string, column: string): boolean {
   const rows = db.prepare(`PRAGMA table_info(${table})`).all();
   return rows.some((row) => row["name"] === column);
+}
+
+/**
+ * Create the FTS5 virtual table for memories plus the triggers that keep it
+ * in sync with the base table. FTS5 may be unavailable on stripped-down
+ * SQLite builds — callers should treat failure as non-fatal and fall back
+ * to LIKE-based scans in `memory-store.queryMemoriesRanked`.
+ */
+export function tryCreateMemoriesFts(db: DbAdapter): boolean {
+  try {
+    db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts
+      USING fts5(content, content='memories', content_rowid='seq', tokenize='porter unicode61')
+    `);
+    // Triggers mirror inserts / updates / deletes on the base memories table.
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS memories_ai
+      AFTER INSERT ON memories BEGIN
+        INSERT INTO memories_fts(rowid, content) VALUES (new.seq, new.content);
+      END
+    `);
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS memories_ad
+      AFTER DELETE ON memories BEGIN
+        INSERT INTO memories_fts(memories_fts, rowid, content) VALUES ('delete', old.seq, old.content);
+      END
+    `);
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS memories_au
+      AFTER UPDATE OF content ON memories BEGIN
+        INSERT INTO memories_fts(memories_fts, rowid, content) VALUES ('delete', old.seq, old.content);
+        INSERT INTO memories_fts(rowid, content) VALUES (new.seq, new.content);
+      END
+    `);
+    return true;
+  } catch (err) {
+    logWarning("db", `FTS5 unavailable — memory queries will use LIKE fallback: ${(err as Error).message}`);
+    return false;
+  }
+}
+
+export function isMemoriesFtsAvailable(db: DbAdapter): boolean {
+  try {
+    const row = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='memories_fts'")
+      .get();
+    return !!row;
+  } catch {
+    return false;
+  }
 }
 
 function ensureColumn(db: DbAdapter, table: string, column: string, ddl: string): void {
@@ -1030,6 +1094,32 @@ function migrateSchema(db: DbAdapter): void {
       db.exec("CREATE INDEX IF NOT EXISTS idx_memory_sources_scope ON memory_sources(scope)");
       db.prepare("INSERT INTO schema_version (version, applied_at) VALUES (:version, :applied_at)").run({
         ":version": 18,
+        ":applied_at": new Date().toISOString(),
+      });
+    }
+
+    if (currentVersion < 19) {
+      // Memory system Phase 3: embeddings + FTS5 for hybrid retrieval.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS memory_embeddings (
+          memory_id TEXT PRIMARY KEY,
+          model TEXT NOT NULL,
+          dim INTEGER NOT NULL,
+          vector BLOB NOT NULL,
+          updated_at TEXT NOT NULL
+        )
+      `);
+      tryCreateMemoriesFts(db);
+      // Backfill FTS5 with any existing memories (triggers only cover future writes).
+      if (isMemoriesFtsAvailable(db)) {
+        try {
+          db.exec(`INSERT INTO memories_fts(rowid, content) SELECT seq, content FROM memories`);
+        } catch (err) {
+          logWarning("db", `FTS5 backfill failed: ${(err as Error).message}`);
+        }
+      }
+      db.prepare("INSERT INTO schema_version (version, applied_at) VALUES (:version, :applied_at)").run({
+        ":version": 19,
         ":applied_at": new Date().toISOString(),
       });
     }
@@ -3515,6 +3605,39 @@ export function deleteMemorySourceRow(id: string): boolean {
   const res = currentDb
     .prepare("DELETE FROM memory_sources WHERE id = :id")
     .run({ ":id": id }) as { changes?: number };
+  return (res?.changes ?? 0) > 0;
+}
+
+export function upsertMemoryEmbedding(args: {
+  memoryId: string;
+  model: string;
+  dim: number;
+  vector: Uint8Array;
+  updatedAt: string;
+}): void {
+  if (!currentDb) throw new GSDError(GSD_STALE_STATE, "gsd-db: No database open");
+  currentDb.prepare(
+    `INSERT INTO memory_embeddings (memory_id, model, dim, vector, updated_at)
+     VALUES (:memory_id, :model, :dim, :vector, :updated_at)
+     ON CONFLICT(memory_id) DO UPDATE SET
+       model = excluded.model,
+       dim = excluded.dim,
+       vector = excluded.vector,
+       updated_at = excluded.updated_at`,
+  ).run({
+    ":memory_id": args.memoryId,
+    ":model": args.model,
+    ":dim": args.dim,
+    ":vector": args.vector,
+    ":updated_at": args.updatedAt,
+  });
+}
+
+export function deleteMemoryEmbedding(memoryId: string): boolean {
+  if (!currentDb) throw new GSDError(GSD_STALE_STATE, "gsd-db: No database open");
+  const res = currentDb
+    .prepare("DELETE FROM memory_embeddings WHERE memory_id = :id")
+    .run({ ":id": memoryId }) as { changes?: number };
   return (res?.changes ?? 0) > 0;
 }
 
