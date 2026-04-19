@@ -29,7 +29,7 @@ const gsdHome = process.env.GSD_HOME || join(homedir(), ".gsd");
  * hardcoding absolute paths in the system prompt template. Only skills
  * that actually exist on disk are included in the table. (#3575)
  */
-const BUNDLED_SKILL_TRIGGERS: Array<{ trigger: string; skill: string }> = [
+export const BUNDLED_SKILL_TRIGGERS: Array<{ trigger: string; skill: string }> = [
   { trigger: "Frontend UI - web components, pages, landing pages, dashboards, React/HTML/CSS, styling", skill: "frontend-design" },
   { trigger: "macOS or iOS apps - SwiftUI, Xcode, App Store", skill: "swiftui" },
   { trigger: "Debugging - complex bugs, failing tests, root-cause investigation after standard approaches fail", skill: "debug-like-expert" },
