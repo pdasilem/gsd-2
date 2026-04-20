@@ -1334,8 +1334,12 @@ export function closeDatabase(): void {
     currentDb = null;
     currentPath = null;
     currentPid = 0;
-    _dbOpenAttempted = false;
   }
+  // Reset session-scoped state unconditionally so stale error info from a
+  // failed open doesn't persist into the next open attempt or status check.
+  _dbOpenAttempted = false;
+  _lastDbError = null;
+  _lastDbPhase = null;
 }
 
 /** Run a full VACUUM — call sparingly (e.g. after milestone completion). */

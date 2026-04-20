@@ -9,6 +9,7 @@ import {
   isDbAvailable,
   wasDbOpenAttempted,
   getDbProvider,
+  getDbStatus,
   insertDecision,
   getDecisionById,
   insertRequirement,
@@ -558,6 +559,92 @@ describe('gsd-db', () => {
       closeDatabase();
       // Must not throw
       assert.doesNotThrow(() => checkpointDatabase());
+    });
+  });
+
+  // ─── getDbStatus ───────────────────────────────────────────────────────────
+
+  describe('getDbStatus', () => {
+    test('getDbStatus: initial state before any open', () => {
+      closeDatabase();
+      const status = getDbStatus();
+      assert.strictEqual(status.available, false, 'available false before open');
+      assert.strictEqual(status.attempted, false, 'attempted false before open');
+      assert.strictEqual(status.lastError, null, 'lastError null before open');
+      assert.strictEqual(status.lastPhase, null, 'lastPhase null before open');
+    });
+
+    test('getDbStatus: available after successful open', () => {
+      openDatabase(':memory:');
+      const status = getDbStatus();
+      assert.strictEqual(status.available, true, 'available true after open');
+      assert.strictEqual(status.attempted, true, 'attempted true after open');
+      assert.ok(status.provider !== null, 'provider set after open');
+      assert.strictEqual(status.lastError, null, 'lastError null on success');
+      assert.strictEqual(status.lastPhase, null, 'lastPhase null on success');
+      closeDatabase();
+    });
+
+    test('getDbStatus: resets lastError/lastPhase after closeDatabase', () => {
+      // Simulate a failed open to set error state
+      const corruptPath = path.join(os.tmpdir(), `gsd-corrupt-${Date.now()}.db`);
+      fs.writeFileSync(corruptPath, Buffer.from('not a sqlite file at all!!!!!'));
+      try {
+        openDatabase(corruptPath);
+      } catch {
+        // expected
+      }
+      assert.ok(getDbStatus().lastError !== null, 'lastError set after failed open');
+
+      // closeDatabase should clear it even though no DB was opened
+      closeDatabase();
+      const status = getDbStatus();
+      assert.strictEqual(status.lastError, null, 'lastError cleared by closeDatabase');
+      assert.strictEqual(status.lastPhase, null, 'lastPhase cleared by closeDatabase');
+      assert.strictEqual(status.attempted, false, 'attempted reset by closeDatabase');
+      fs.unlinkSync(corruptPath);
+    });
+
+    test('getDbStatus: captures open-phase error on corrupt file', () => {
+      closeDatabase();
+      const corruptPath = path.join(os.tmpdir(), `gsd-corrupt-${Date.now()}.db`);
+      fs.writeFileSync(corruptPath, Buffer.from('not a sqlite file at all!!!!!'));
+      try {
+        openDatabase(corruptPath);
+      } catch {
+        // expected — both providers should reject a non-SQLite file
+      }
+      const status = getDbStatus();
+      if (!status.available) {
+        // open failed (expected in most environments)
+        assert.strictEqual(status.attempted, true, 'attempted true after failed open');
+        // provider may reject at raw-open level ("open") or at SQL init level ("initSchema")
+        assert.ok(
+          status.lastPhase === 'open' || status.lastPhase === 'initSchema',
+          `lastPhase should be "open" or "initSchema", got: ${status.lastPhase}`,
+        );
+        assert.ok(status.lastError instanceof Error, 'lastError is an Error');
+      }
+      // If somehow it succeeded (unlikely with garbage content), that's also fine
+      closeDatabase();
+      try { fs.unlinkSync(corruptPath); } catch { /* best effort */ }
+    });
+
+    test('getDbStatus: error state resets on next successful open', () => {
+      closeDatabase();
+      const corruptPath = path.join(os.tmpdir(), `gsd-corrupt-${Date.now()}.db`);
+      fs.writeFileSync(corruptPath, Buffer.from('not a sqlite file at all!!!!!'));
+      try { openDatabase(corruptPath); } catch { /* expected */ }
+      assert.ok(!getDbStatus().available, 'DB unavailable after corrupt open');
+
+      // Now open a valid in-memory DB — error state should clear
+      openDatabase(':memory:');
+      const status = getDbStatus();
+      assert.strictEqual(status.available, true, 'available after valid open');
+      assert.strictEqual(status.lastError, null, 'lastError cleared on successful open');
+      assert.strictEqual(status.lastPhase, null, 'lastPhase cleared on successful open');
+      closeDatabase();
+      try { fs.unlinkSync(corruptPath); } catch { /* best effort */ }
     });
   });
 
