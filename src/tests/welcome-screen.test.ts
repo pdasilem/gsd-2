@@ -114,10 +114,12 @@ test('Active row truncates with ellipsis when milestone text overflows panel wid
     rmSync(tmp, { recursive: true, force: true })
   })
 
+  const columns = (process.stderr as any).columns as number
   const out = strip(capture({ version: '1.0.0' }))
   const activeLine = out.split('\n').find(l => /Active\s/.test(l))
   assert.ok(activeLine, 'Active row should be present')
   assert.ok(activeLine!.includes('…'), 'Active row should truncate long text with ellipsis')
+  assert.ok(activeLine!.length <= columns, `Active row length ${activeLine!.length} should not exceed terminal width ${columns}`)
 })
 
 test('Active row does not truncate short milestone text', (t) => {
