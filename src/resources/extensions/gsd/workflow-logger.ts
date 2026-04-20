@@ -57,7 +57,8 @@ export type LogComponent =
   | "ecosystem"     // GSD ecosystem extension loader and dispatch
   | "memory-embeddings" // Memory layer embedding generation
   | "memory-ingest"     // Memory layer ingestion pipeline
-  | "memory-backfill";  // ADR-013: decisions->memories backfill
+  | "memory-backfill"   // ADR-013: decisions->memories backfill
+  | "context-mode";    // Context-mode exec sandbox and compaction snapshot
 
 export interface LogEntry {
   ts: string;
