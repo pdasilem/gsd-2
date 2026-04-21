@@ -345,6 +345,8 @@ test("boot and onboarding routes expose locked required state plus explicitly sk
     "xai",
     "openrouter",
     "mistral",
+    "minimax",
+    "minimax-cn",
     "claude-code",
   ]);
   const anthropicProvider = bootPayload.onboarding.required.providers.find((provider: any) => provider.id === "anthropic");

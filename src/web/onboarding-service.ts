@@ -185,6 +185,8 @@ const REQUIRED_PROVIDER_CATALOG: RequiredProviderCatalogEntry[] = [
   { id: "xai", label: "xAI (Grok)", supportsApiKey: true, supportsOAuth: false },
   { id: "openrouter", label: "OpenRouter", supportsApiKey: true, supportsOAuth: false },
   { id: "mistral", label: "Mistral", supportsApiKey: true, supportsOAuth: false },
+  { id: "minimax", label: "MiniMax", supportsApiKey: true, supportsOAuth: false },
+  { id: "minimax-cn", label: "MiniMax CN", supportsApiKey: true, supportsOAuth: false },
   { id: "claude-code", label: "Claude Code (Local CLI)", supportsApiKey: false, supportsOAuth: false, supportsExternalCli: true, recommended: true },
 ];
 
@@ -408,6 +410,39 @@ async function validateAnthropicApiKey(fetchImpl: typeof fetch, apiKey: string):
   }
 }
 
+async function validateAnthropicCompatibleApiKey(
+  fetchImpl: typeof fetch,
+  providerId: string,
+  apiKey: string,
+  baseUrl: string,
+  model: string,
+): Promise<ValidationProbeResult> {
+  try {
+    const response = await fetchImpl(`${baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: {
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: 1,
+        messages: [{ role: "user", content: "hi" }],
+      }),
+      signal: AbortSignal.timeout(15_000),
+    });
+
+    if (!response.ok) {
+      return { ok: false, message: await parseFailureMessage(providerId, response) };
+    }
+
+    return { ok: true, message: `${providerId} credentials validated` };
+  } catch (error) {
+    return { ok: false, message: `${providerId} validation failed: ${sanitizeMessage(error)}` };
+  }
+}
+
 async function defaultValidateApiKey(
   providerId: string,
   apiKey: string,
@@ -431,6 +466,22 @@ async function defaultValidateApiKey(
       });
     case "mistral":
       return await validateBearerRequest(fetchImpl, providerId, "https://api.mistral.ai/v1/models", apiKey);
+    case "minimax":
+      return await validateAnthropicCompatibleApiKey(
+        fetchImpl,
+        providerId,
+        apiKey,
+        "https://api.minimax.io/anthropic",
+        "MiniMax-M2.7",
+      );
+    case "minimax-cn":
+      return await validateAnthropicCompatibleApiKey(
+        fetchImpl,
+        providerId,
+        apiKey,
+        "https://api.minimaxi.com/anthropic",
+        "MiniMax-M2.7",
+      );
     default:
       return { ok: false, message: `${providerId} does not support API-key validation via onboarding` };
   }

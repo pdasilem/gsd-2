@@ -51,6 +51,8 @@ export const PROVIDER_REGISTRY: ProviderInfo[] = [
   { id: "xai",              label: "xAI (Grok)",              category: "llm", envVar: "XAI_API_KEY",            dashboardUrl: "console.x.ai" },
   { id: "openrouter",       label: "OpenRouter",              category: "llm", envVar: "OPENROUTER_API_KEY",     dashboardUrl: "openrouter.ai/keys" },
   { id: "mistral",          label: "Mistral",                 category: "llm", envVar: "MISTRAL_API_KEY",        dashboardUrl: "console.mistral.ai" },
+  { id: "minimax",          label: "MiniMax",                 category: "llm", envVar: "MINIMAX_API_KEY",        dashboardUrl: "platform.minimax.io" },
+  { id: "minimax-cn",       label: "MiniMax CN",              category: "llm", envVar: "MINIMAX_CN_API_KEY",     dashboardUrl: "platform.minimax.io" },
   { id: "ollama-cloud",     label: "Ollama Cloud",            category: "llm", envVar: "OLLAMA_API_KEY" },
   { id: "custom-openai",    label: "Custom (OpenAI-compat)",  category: "llm", envVar: "CUSTOM_OPENAI_API_KEY" },
   { id: "cerebras",         label: "Cerebras",                category: "llm", envVar: "CEREBRAS_API_KEY" },
@@ -485,6 +487,26 @@ const TEST_ENDPOINTS: Record<string, { url: string; method?: string; headers?: (
   mistral: {
     url: "https://api.mistral.ai/v1/models",
     headers: (key) => ({ Authorization: `Bearer ${key}` }),
+  },
+  minimax: {
+    url: "https://api.minimax.io/anthropic/v1/messages",
+    method: "POST",
+    headers: (key) => ({
+      "x-api-key": key,
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+    }),
+    body: JSON.stringify({ model: "MiniMax-M2.7", max_tokens: 1, messages: [{ role: "user", content: "hi" }] }),
+  },
+  "minimax-cn": {
+    url: "https://api.minimaxi.com/anthropic/v1/messages",
+    method: "POST",
+    headers: (key) => ({
+      "x-api-key": key,
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+    }),
+    body: JSON.stringify({ model: "MiniMax-M2.7", max_tokens: 1, messages: [{ role: "user", content: "hi" }] }),
   },
   openrouter: {
     url: "https://openrouter.ai/api/v1/models",

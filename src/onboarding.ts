@@ -109,6 +109,8 @@ const OTHER_PROVIDERS = [
   { value: 'xai', label: 'xAI (Grok)', hint: 'console.x.ai' },
   { value: 'openrouter', label: 'OpenRouter', hint: '200+ models — openrouter.ai/keys' },
   { value: 'mistral', label: 'Mistral', hint: 'console.mistral.ai/api-keys' },
+  { value: 'minimax', label: 'MiniMax', hint: 'platform.minimax.io (Anthropic-compatible recommended)' },
+  { value: 'minimax-cn', label: 'MiniMax CN', hint: 'api.minimaxi.com (Anthropic-compatible)' },
   { value: 'ollama-cloud', label: 'Ollama Cloud' },
   { value: 'custom-openai', label: 'Custom (OpenAI-compatible)', hint: 'Ollama, LM Studio, vLLM, proxies — see docs/providers.md' },
 ]
@@ -181,6 +183,36 @@ function persistDefaultProvider(providerId: string): void {
   } catch {
     // Non-fatal: startup fallback logic will still run.
   }
+}
+
+/**
+ * Persist the selected default model to settings.json.
+ */
+function persistDefaultModel(modelId: string): void {
+  const settingsPath = join(agentDir, 'settings.json')
+  try {
+    const raw = existsSync(settingsPath) ? JSON.parse(readFileSync(settingsPath, 'utf-8')) : {}
+    raw.defaultModel = modelId
+    mkdirSync(dirname(settingsPath), { recursive: true })
+    writeFileSync(settingsPath, JSON.stringify(raw, null, 2), 'utf-8')
+  } catch {
+    // Non-fatal: startup fallback logic will still run.
+  }
+}
+
+function detectNativeProviderFromBaseUrl(baseUrl: string): 'minimax' | 'minimax-cn' | null {
+  try {
+    const hostname = new URL(baseUrl).hostname.toLowerCase()
+    if (hostname === 'api.minimax.io' || hostname.endsWith('.minimax.io')) {
+      return 'minimax'
+    }
+    if (hostname === 'api.minimaxi.com' || hostname.endsWith('.minimaxi.com')) {
+      return 'minimax-cn'
+    }
+  } catch {
+    // ignore parse failures; handled by prior validation
+  }
+  return null
 }
 
 /** Sentinel returned by runStep when the user cancels — tells the caller
@@ -649,9 +681,24 @@ async function runCustomOpenAIFlow(
   if (p.isCancel(modelId) || !modelId) return false
   const trimmedModelId = (modelId as string).trim()
 
+  const nativeProvider = detectNativeProviderFromBaseUrl(trimmedUrl)
+  if (nativeProvider) {
+    const envVar = nativeProvider === 'minimax' ? 'MINIMAX_API_KEY' : 'MINIMAX_CN_API_KEY'
+    authStorage.set(nativeProvider, { type: 'api_key', key: trimmedKey })
+    persistDefaultProvider(nativeProvider)
+    persistDefaultModel(trimmedModelId)
+    process.env[envVar] = trimmedKey
+
+    p.log.success(`${pc.green('MiniMax')} detected — configured as native provider (${pc.cyan(nativeProvider)})`)
+    p.log.info(`Model: ${pc.cyan(trimmedModelId)}`)
+    p.log.info(pc.dim('Using Anthropic-compatible MiniMax integration for full model metadata and clean thinking output.'))
+    return true
+  }
+
   // Save API key to auth storage
   authStorage.set('custom-openai', { type: 'api_key', key: trimmedKey })
   persistDefaultProvider('custom-openai')
+  persistDefaultModel(trimmedModelId)
 
   // Write or merge into models.json
   const modelsJsonPath = join(agentDir, 'models.json')

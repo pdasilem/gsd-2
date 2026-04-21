@@ -141,6 +141,8 @@ test("PROVIDER_REGISTRY includes all major LLM providers", () => {
   assert.ok(ids.includes("openai"));
   assert.ok(ids.includes("google"));
   assert.ok(ids.includes("groq"));
+  assert.ok(ids.includes("minimax"));
+  assert.ok(ids.includes("minimax-cn"));
 });
 
 test("PROVIDER_REGISTRY includes claude-code as a first-class LLM provider (#4541)", () => {
