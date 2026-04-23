@@ -21,6 +21,9 @@ import type {
 import type { ExtensionUIContext } from "@gsd/pi-coding-agent";
 import { EventStream } from "@gsd/pi-ai";
 import { execSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import { PartialMessageBuilder, ZERO_USAGE, mapUsage } from "./partial-builder.js";
 import { buildWorkflowMcpServers } from "../gsd/workflow-mcp.js";
 import { showInterviewRound, type Question, type RoundResult } from "../shared/tui.js";
@@ -178,34 +181,88 @@ export function getResultErrorMessage(result: SDKResultMessage): string {
 // Claude binary resolution
 // ---------------------------------------------------------------------------
 
-/** Cached result of the `which`/`where claude` lookup so the shell is only spawned once per process. */
+/** Cached result of the Claude executable/script resolution so lookup runs once per process. */
 let cachedClaudePath: string | null = null;
+const requireFromHere = createRequire(import.meta.url);
 
 /** Return the shell command used to locate the `claude` binary on the given platform. */
 export function getClaudeLookupCommand(platform: NodeJS.Platform = process.platform): string {
 	return platform === "win32" ? "where claude" : "which claude";
 }
 
-/** Extract the first line of `which`/`where` output as the resolved binary path. */
-export function parseClaudeLookupOutput(output: Buffer | string): string {
-	return output
+/**
+ * Pick the most suitable path from `which`/`where` output.
+ *
+ * On Windows, `where claude` can return shim entries first (for example
+ * `...\\npm\\claude` / `...\\npm\\claude.cmd`) that the Claude Agent SDK treats
+ * as a native executable path and then fails to spawn. Prefer a native
+ * `.exe` candidate when present.
+ */
+export function parseClaudeLookupOutput(output: Buffer | string, platform: NodeJS.Platform = process.platform): string {
+	const lines = output
 		.toString()
-		.trim()
-		.split(/\r?\n/)[0] ?? "";
+		.split(/\r?\n/)
+		.map((line) => line.trim())
+		.filter(Boolean);
+
+	if (lines.length === 0) return "";
+	if (platform !== "win32") return lines[0] ?? "";
+
+	const exeCandidate = lines.find((line) => /\.exe$/i.test(line));
+	if (exeCandidate) return exeCandidate;
+
+	const cmdCandidate = lines.find((line) => /\.cmd$/i.test(line));
+	if (cmdCandidate) return cmdCandidate;
+
+	return lines[0] ?? "";
+}
+
+/** Resolve the SDK-bundled cli.js path if available. */
+export function resolveBundledClaudeCliPath(): string | null {
+	try {
+		const sdkEntry = requireFromHere.resolve("@anthropic-ai/claude-agent-sdk");
+		const cliPath = join(dirname(sdkEntry), "cli.js");
+		return existsSync(cliPath) ? cliPath : null;
+	} catch {
+		return null;
+	}
 }
 
 /**
- * Resolve the path to the system-installed `claude` binary.
- * The SDK defaults to a bundled cli.js which doesn't exist when
- * installed as a library — we need to point it at the real CLI.
+ * Normalize a discovered path for Claude Agent SDK consumption.
+ *
+ * On Windows, the SDK treats non-`.js` paths as native binaries. NPM shims
+ * like `claude`/`claude.cmd` are not native binaries and can fail with
+ * `ENOENT`/`EINVAL` in that mode. When no `.exe` is available, prefer the
+ * SDK-bundled `cli.js` so the SDK runs via Node.
  */
+export function normalizeClaudePathForSdk(
+	resolvedPath: string,
+	platform: NodeJS.Platform = process.platform,
+	bundledCliPath: string | null = resolveBundledClaudeCliPath(),
+): string {
+	if (platform !== "win32") return resolvedPath;
+	if (/\.exe$/i.test(resolvedPath)) return resolvedPath;
+	if (bundledCliPath) return bundledCliPath;
+	return resolvedPath;
+}
+
+/** Resolve the path passed to `pathToClaudeCodeExecutable`. */
 function getClaudePath(): string {
 	if (cachedClaudePath) return cachedClaudePath;
+
+	const fallback = process.platform === "win32"
+		? (resolveBundledClaudeCliPath() ?? "claude.cmd")
+		: "claude";
+
 	try {
-		cachedClaudePath = parseClaudeLookupOutput(execSync(getClaudeLookupCommand(), { timeout: 5_000, stdio: "pipe" }));
+		const lookupOutput = execSync(getClaudeLookupCommand(), { timeout: 5_000, stdio: "pipe" });
+		const parsed = parseClaudeLookupOutput(lookupOutput, process.platform);
+		cachedClaudePath = normalizeClaudePathForSdk(parsed || fallback, process.platform);
 	} catch {
-		cachedClaudePath = "claude"; // fall back to PATH resolution
+		cachedClaudePath = fallback;
 	}
+
 	return cachedClaudePath;
 }
 

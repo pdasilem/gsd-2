@@ -20,6 +20,8 @@ import {
 	parseAskUserQuestionsElicitation,
 	parseTextInputElicitation,
 	parseClaudeLookupOutput,
+	resolveBundledClaudeCliPath,
+	normalizeClaudePathForSdk,
 	roundResultToElicitationContent,
 } from "../stream-adapter.ts";
 import type { AssistantMessage, Context, Message } from "@gsd/pi-ai";
@@ -1357,8 +1359,30 @@ describe("stream-adapter — Windows Claude path lookup (#3770)", () => {
 		assert.equal(getClaudeLookupCommand("linux"), "which claude");
 	});
 
-	test("parseClaudeLookupOutput keeps the first native path from multi-line lookup output", () => {
-		const output = "C:\\Users\\Binoy\\.local\\bin\\claude.exe\r\nC:\\Program Files\\Claude\\claude.exe\r\n";
-		assert.equal(parseClaudeLookupOutput(output), "C:\\Users\\Binoy\\.local\\bin\\claude.exe");
+	test("parseClaudeLookupOutput prefers .exe on win32 when where output includes shims", () => {
+		const output = [
+			"C:\\Users\\djeff\\AppData\\Roaming\\npm\\claude",
+			"C:\\Users\\djeff\\AppData\\Roaming\\npm\\claude.cmd",
+			"C:\\Program Files\\Claude\\claude.exe",
+		].join("\r\n");
+		assert.equal(parseClaudeLookupOutput(output, "win32"), "C:\\Program Files\\Claude\\claude.exe");
+	});
+
+	test("parseClaudeLookupOutput keeps first line on non-win32 platforms", () => {
+		const output = "/usr/local/bin/claude\n/opt/homebrew/bin/claude\n";
+		assert.equal(parseClaudeLookupOutput(output, "darwin"), "/usr/local/bin/claude");
+	});
+
+	test("normalizeClaudePathForSdk swaps Windows shim paths to bundled cli.js", () => {
+		const shimPath = "C:\\Users\\djeff\\AppData\\Roaming\\npm\\claude";
+		const bundled = "C:\\repo\\node_modules\\@anthropic-ai\\claude-agent-sdk\\cli.js";
+		assert.equal(normalizeClaudePathForSdk(shimPath, "win32", bundled), bundled);
+		assert.equal(normalizeClaudePathForSdk("C:\\Program Files\\Claude\\claude.exe", "win32", bundled), "C:\\Program Files\\Claude\\claude.exe");
+	});
+
+	test("resolveBundledClaudeCliPath returns a .js path when SDK package is present", () => {
+		const resolved = resolveBundledClaudeCliPath();
+		assert.ok(resolved, "expected sdk cli.js to be resolvable in test workspace");
+		assert.match(resolved!, /[\\/]@anthropic-ai[\\/]claude-agent-sdk[\\/]cli\.js$/);
 	});
 });
