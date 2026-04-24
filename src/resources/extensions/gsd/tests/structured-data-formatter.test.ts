@@ -271,12 +271,15 @@ describe("structured-data-formatter: measureSavings", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Removed: "decisions/requirements/task-plan saves 30%+ vs markdown" tests.
+// Dropped (#4836): the previous "realistic savings" suite asserted that the
+// compact formatter beat hand-authored "typical markdown" baselines by 30%+.
+// Those baselines were written by the test author to make the assertion pass
+// — they are not the format GSD actually emits anywhere else, so shifting
+// the compact output by any amount could be absorbed by padding the baseline.
+// There was no regression signal.
 //
-// These tests compared the compact formatters against hand-crafted markdown
-// fixtures chosen by the test author. Any baseline picked to demonstrate
-// savings is circular — it proves nothing about real-world token overhead
-// relative to what the app actually emits. See #4836. A proper savings-drift
-// harness (measured against captured real inputs, tracked as a regression
-// metric over time) is tracked as a follow-up.
+// The unit tests above already pin the compact format's structure byte for
+// byte; a genuine regression changes one of those exact-string assertions.
+// If a size-budget guarantee is needed later, capture a real production
+// baseline into a fixture file and assert against a checked-in byte count.
 // ---------------------------------------------------------------------------
