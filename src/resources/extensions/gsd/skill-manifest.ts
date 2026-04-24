@@ -31,6 +31,7 @@ function normalize(name: string): string {
  * over an exhaustive list when uncertain.
  */
 const UNIT_TYPE_SKILL_MANIFEST: Record<string, string[]> = {
+  // Milestone-level planning / meta flows — predictable skill sets.
   "research-milestone": [
     "write-docs",
     "write-milestone-brief",
@@ -50,6 +51,75 @@ const UNIT_TYPE_SKILL_MANIFEST: Record<string, string[]> = {
     "tdd",
     "verify-before-complete",
   ],
+  "complete-milestone": [
+    "verify-before-complete",
+    "write-docs",
+    "handoff",
+    "forensics",
+    "observability",
+    "security-review",
+  ],
+  "validate-milestone": [
+    "verify-before-complete",
+    "review",
+    "test",
+    "lint",
+    "security-review",
+    "accessibility",
+    "forensics",
+    "observability",
+  ],
+  "reassess-roadmap": [
+    "decompose-into-slices",
+    "grill-me",
+    "write-milestone-brief",
+    "write-docs",
+    "forensics",
+  ],
+  // Slice-level research / planning.
+  "research-slice": [
+    "write-docs",
+    "decompose-into-slices",
+    "design-an-interface",
+    "grill-me",
+    "api-design",
+    "observability",
+  ],
+  "plan-slice": [
+    "decompose-into-slices",
+    "design-an-interface",
+    "grill-me",
+    "write-docs",
+    "api-design",
+    "tdd",
+    "verify-before-complete",
+  ],
+  "refine-slice": [
+    "decompose-into-slices",
+    "design-an-interface",
+    "grill-me",
+    "write-docs",
+    "api-design",
+    "tdd",
+    "verify-before-complete",
+  ],
+  "replan-slice": [
+    "decompose-into-slices",
+    "grill-me",
+    "design-an-interface",
+    "write-docs",
+    "api-design",
+  ],
+  "run-uat": [
+    "verify-before-complete",
+    "test",
+    "review",
+    "accessibility",
+  ],
+  // `execute-task` intentionally omitted — implementation hot path covers a
+  // wide surface of technologies; wildcard fallback preserves today's
+  // behavior until per-task skill hints can be derived from task-plan
+  // frontmatter. See RFC #4779.
 };
 
 /**

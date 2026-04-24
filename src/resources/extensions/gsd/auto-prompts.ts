@@ -1324,6 +1324,7 @@ export async function buildResearchSlicePrompt(
       sliceId: sid,
       sliceTitle: sTitle,
       extraContext: [inlinedContext, depContent],
+      unitType: "research-slice",
     }),
     ...buildSkillDiscoveryVars(),
   });
@@ -1428,6 +1429,7 @@ async function renderSlicePrompt(options: {
       sliceId: sid,
       sliceTitle: sTitle,
       extraContext: [inlinedContext, depContent],
+      unitType: promptTemplate,
     }),
     ...extraVars,
   });
@@ -1873,6 +1875,7 @@ export async function buildCompleteMilestonePrompt(
       milestoneId: mid,
       milestoneTitle: midTitle,
       extraContext: [inlinedContext],
+      unitType: "complete-milestone",
     }),
   });
 }
@@ -2013,6 +2016,7 @@ export async function buildValidateMilestonePrompt(
       milestoneId: mid,
       milestoneTitle: midTitle,
       extraContext: [inlinedContext],
+      unitType: "validate-milestone",
     }),
   });
 }
@@ -2095,6 +2099,7 @@ export async function buildReplanSlicePrompt(
       sliceId: sid,
       sliceTitle: sTitle,
       extraContext: [inlinedContext, captureContext],
+      unitType: "replan-slice",
     }),
   });
 }
@@ -2133,6 +2138,7 @@ export async function buildRunUatPrompt(
       milestoneId: mid,
       sliceId,
       extraContext: [inlinedContext],
+      unitType: "run-uat",
     }),
   });
 }
@@ -2200,6 +2206,7 @@ export async function buildReassessRoadmapPrompt(
       milestoneId: mid,
       milestoneTitle: midTitle,
       extraContext: [inlinedContext, deferredCaptures],
+      unitType: "reassess-roadmap",
     }),
   });
 }
