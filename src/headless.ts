@@ -334,6 +334,30 @@ async function runHeadlessOnce(options: HeadlessOptions, restartCount: number): 
     return { exitCode: result.exitCode, interrupted: false }
   }
 
+  // Doctor: read-only health check, no RPC child needed (#4904 live-regression).
+  // The interactive `/gsd doctor` command lives in the GSD extension; this CLI
+  // path lets non-interactive callers (CI, recovery scripts, the live-regression
+  // suite) get the same diagnostic without a TTY.
+  if (options.command === 'doctor') {
+    const wantsJson = options.json || options.commandArgs.includes('--json')
+    const { runGSDDoctor } = await import('./resources/extensions/gsd/doctor.js')
+    const { formatDoctorReport, formatDoctorReportJson } = await import('./resources/extensions/gsd/doctor-format.js')
+    let exitCode = 1
+    try {
+      const report = await runGSDDoctor(process.cwd())
+      const out = wantsJson ? formatDoctorReportJson(report) : formatDoctorReport(report)
+      process.stdout.write(`${out}\n`)
+      exitCode = report.ok ? 0 : 1
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      process.stderr.write(`[headless] doctor failed: ${msg}\n`)
+      exitCode = 1
+    }
+    // Bypass the auto-restart loop in runHeadless — doctor is a one-shot
+    // diagnostic; exit 1 means "issues detected", not "crashed".
+    process.exit(exitCode)
+  }
+
   // Resolve CLI path for the child process
   const cliPath = process.env.GSD_BIN_PATH || process.argv[1]
   if (!cliPath) {
