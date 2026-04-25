@@ -308,6 +308,20 @@ describe("Pre-execution checks → pauseAuto wiring", () => {
         String(call.arguments[0]).includes("Pre-execution checks failed")
     );
     assert.ok(errorNotify, "Should show error notification about pre-execution check failure");
+    const errorMessage = String(errorNotify.arguments[0]);
+    assert.match(
+      errorMessage,
+      /Pre-execution checks failed: \d+ blocking issue/,
+      "failure notification should include the blocking issue count",
+    );
+    assert.ok(
+      errorMessage.includes("nonexistent-file-that-does-not-exist.ts"),
+      "failure notification should include an actionable check detail",
+    );
+    assert.ok(
+      errorMessage.includes("S01-PRE-EXEC-VERIFY.json"),
+      "failure notification should point to the full pre-exec evidence file",
+    );
   });
 
   test("pauseAuto is called when enhanced_verification_strict: true and pre-execution returns warn", async () => {
