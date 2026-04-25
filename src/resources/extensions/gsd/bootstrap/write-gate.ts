@@ -1,5 +1,9 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
+
+import { minimatch } from "minimatch";
+
+import type { ToolsPolicy } from "../unit-context-manifest.js";
 
 /**
  * Regex matching milestone CONTEXT.md file names in both legacy M001
@@ -502,4 +506,153 @@ export function shouldBlockQueueExecutionInSnapshot(
     block: true,
     reason: `Blocked: /gsd queue is a planning tool — it creates milestones, not executes work. Unknown tools are not permitted during queue mode.`,
   };
+}
+
+// ─── Planning-unit tools-policy enforcement (#4934) ───────────────────────
+//
+// Runtime half of the declarative ToolsPolicy on UnitContextManifest. The
+// manifest assigns each unit type a tools mode; this predicate is what
+// actually rejects a tool call that violates it.
+//
+// Forensics: a discuss-milestone LLM turn used the host Edit tool to modify
+// index.html in test app b23 (~/Github/test-apps/b23). With this predicate
+// wired into the tool_call hook, the same call returns block=true with a
+// HARD BLOCK reason that the model cannot rationalize past.
+//
+// Activation: the hook supplies the policy resolved from the active unit's
+// manifest. When no unit is active (interactive sessions, unknown unit
+// types), the hook passes null and this predicate is a no-op — falling
+// through to the existing pendingGate / queue-execution / context-write
+// guards.
+
+const PLANNING_WRITE_TOOLS = new Set(["write", "edit", "multi_edit", "notebook_edit"]);
+const PLANNING_SUBAGENT_TOOLS = new Set(["subagent", "task"]);
+
+/**
+ * Read-only / planning-safe tools that any non-"all" mode allows. Mirrors
+ * QUEUE_SAFE_TOOLS / GATE_SAFE_TOOLS but is the inclusive default for
+ * planning units (which need their full discussion + research surface).
+ *
+ * gsd_* MCP tools are passed through unconditionally — they have their own
+ * domain validation (e.g. depth-verification gate, single-writer DB).
+ */
+const PLANNING_SAFE_TOOLS = new Set([
+  "read", "grep", "find", "ls", "glob",
+  "ask_user_questions",
+  "search-the-web", "resolve_library", "get_library_docs", "fetch_page",
+  "search_and_read",
+]);
+
+function isPathUnderGsd(absPath: string, basePath: string): boolean {
+  const gsdRoot = resolve(basePath, ".gsd");
+  const rel = relative(gsdRoot, absPath);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+function matchesAllowedGlob(absPath: string, basePath: string, globs: readonly string[]): boolean {
+  const rel = relative(basePath, absPath);
+  if (rel.startsWith("..") || isAbsolute(rel)) return false;
+  // Normalize Windows separators for minimatch.
+  const posix = rel.split(sep).join("/");
+  return globs.some(g => minimatch(posix, g, { dot: false, nocase: false }));
+}
+
+function blockReason(unitType: string, mode: string, what: string): string {
+  return [
+    `HARD BLOCK: unit "${unitType}" runs under tools-policy "${mode}" — ${what}.`,
+    `This is a mechanical gate enforced by manifest.tools (#4934). You MUST NOT proceed,`,
+    `retry the same call, or rationalize past this block. If you need to write user source,`,
+    `the work belongs in execute-task, not in a planning unit.`,
+  ].join(" ");
+}
+
+/**
+ * Planning-unit tool-policy enforcement. Returns { block } per the policy
+ * resolved from the active unit's manifest:
+ *
+ *   - "all"        → never blocks.
+ *   - "read-only"  → blocks all writes, bash, and subagent dispatch.
+ *   - "planning"   → blocks writes to paths outside <basePath>/.gsd/,
+ *                    bash that isn't read-only, and subagent dispatch.
+ *   - "docs"       → like "planning" but also allows writes to paths
+ *                    matching `allowedPathGlobs` relative to basePath.
+ *
+ * `pathOrCommand` is the file path for write/edit-shaped tools and the
+ * shell command for bash. Other tools ignore this argument.
+ *
+ * `policy` of null means "no manifest resolved" — pass-through. Callers
+ * that have no active unit (interactive sessions) pass null and this
+ * predicate is a no-op.
+ */
+export function shouldBlockPlanningUnit(
+  toolName: string,
+  pathOrCommand: string,
+  basePath: string,
+  unitType: string,
+  policy: ToolsPolicy | null | undefined,
+): { block: boolean; reason?: string } {
+  if (!policy) return { block: false };
+  if (policy.mode === "all") return { block: false };
+
+  const tool = toolName;
+
+  // Read-only mode: only Read-class tools are permitted.
+  if (policy.mode === "read-only") {
+    if (PLANNING_SAFE_TOOLS.has(tool)) return { block: false };
+    if (tool.startsWith("gsd_")) return { block: false };
+    if (PLANNING_WRITE_TOOLS.has(tool) || tool === "bash" || PLANNING_SUBAGENT_TOOLS.has(tool)) {
+      return { block: true, reason: blockReason(unitType, policy.mode, `${tool} is not permitted (read-only)`) };
+    }
+    // Unknown tool in read-only mode — block by default.
+    return { block: true, reason: blockReason(unitType, policy.mode, `tool "${tool}" is not on the read-only allowlist`) };
+  }
+
+  // planning / docs modes share the same surface for safe tools, bash, and subagent.
+  if (PLANNING_SAFE_TOOLS.has(tool)) return { block: false };
+  if (tool.startsWith("gsd_")) return { block: false };
+
+  if (PLANNING_SUBAGENT_TOOLS.has(tool)) {
+    return { block: true, reason: blockReason(unitType, policy.mode, `subagent dispatch is not permitted in planning units`) };
+  }
+
+  if (tool === "bash") {
+    if (BASH_READ_ONLY_RE.test(pathOrCommand)) return { block: false };
+    return {
+      block: true,
+      reason: blockReason(
+        unitType,
+        policy.mode,
+        `bash is restricted to read-only commands (cat/grep/git log/etc); cannot run "${pathOrCommand.slice(0, 80)}${pathOrCommand.length > 80 ? "…" : ""}"`,
+      ),
+    };
+  }
+
+  if (PLANNING_WRITE_TOOLS.has(tool)) {
+    if (!pathOrCommand) {
+      return { block: true, reason: blockReason(unitType, policy.mode, `${tool} called with empty path`) };
+    }
+    const absPath = isAbsolute(pathOrCommand) ? pathOrCommand : resolve(basePath, pathOrCommand);
+
+    // Always allow .gsd/ writes — that's where planning artifacts live.
+    if (isPathUnderGsd(absPath, basePath)) return { block: false };
+
+    // docs mode additionally allows the manifest's allowedPathGlobs.
+    if (policy.mode === "docs" && matchesAllowedGlob(absPath, basePath, policy.allowedPathGlobs)) {
+      return { block: false };
+    }
+
+    return {
+      block: true,
+      reason: blockReason(
+        unitType,
+        policy.mode,
+        `cannot ${tool} "${pathOrCommand}" — writes are restricted to .gsd/${policy.mode === "docs" ? " and " + policy.allowedPathGlobs.join(", ") : ""}`,
+      ),
+    };
+  }
+
+  // Unknown tool name — pass through. Other layers (queue, pending-gate,
+  // CONTEXT.md write) catch known mutating shapes; defaulting to allow here
+  // avoids breaking gsd_* MCP tools or future safe additions.
+  return { block: false };
 }
