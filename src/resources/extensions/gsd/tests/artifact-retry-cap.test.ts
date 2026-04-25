@@ -21,6 +21,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import ts from "typescript";
 
 const dir = join(import.meta.dirname, "..");
 
@@ -28,6 +29,38 @@ const postUnitSrc = readFileSync(join(dir, "auto-post-unit.ts"), "utf-8");
 const phasesSrc = readFileSync(join(dir, "auto", "phases.ts"), "utf-8");
 const sessionSrc = readFileSync(join(dir, "auto", "session.ts"), "utf-8");
 const autoSrc = readFileSync(join(dir, "auto.ts"), "utf-8");
+
+function extractFunctionBody(source: string, functionName: string): string {
+  const sourceFile = ts.createSourceFile(
+    "auto-post-unit.ts",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  let body: ts.Block | undefined;
+
+  function visit(node: ts.Node): void {
+    if (
+      ts.isFunctionDeclaration(node) &&
+      node.name?.text === functionName
+    ) {
+      body = node.body;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+
+  assert.ok(body, `${functionName} must have a function body`);
+  return source.slice(body.getStart(sourceFile) + 1, body.end - 1);
+}
+
+const postUnitPreVerificationBody = extractFunctionBody(
+  postUnitSrc,
+  "postUnitPreVerification",
+);
 
 // ─── Bug 1: artifact retry must be bounded ───────────────────────────────────
 
@@ -39,13 +72,17 @@ test("#2007 bug 1: MAX_ARTIFACT_VERIFICATION_RETRIES constant is defined", () =>
 });
 
 test("#2007 bug 1: attempt is compared against MAX_ARTIFACT_VERIFICATION_RETRIES before returning retry", () => {
-  // Find the artifact retry block
-  const retryIdx = postUnitSrc.indexOf("return \"retry\"");
+  const retryBlockIdx = postUnitPreVerificationBody.indexOf("const retryKey =");
+  assert.ok(retryBlockIdx !== -1, "retry block must exist in postUnitPreVerification");
+
+  const retryIdx = postUnitPreVerificationBody.indexOf("return \"retry\"", retryBlockIdx);
   assert.ok(retryIdx !== -1, "return \"retry\" must exist in postUnitPreVerification");
 
-  // The MAX check must appear before the return "retry"
-  const maxIdx = postUnitSrc.indexOf("MAX_ARTIFACT_VERIFICATION_RETRIES");
-  assert.ok(maxIdx !== -1, "MAX_ARTIFACT_VERIFICATION_RETRIES must be referenced");
+  const maxIdx = postUnitPreVerificationBody.indexOf(
+    "if (attempt > MAX_ARTIFACT_VERIFICATION_RETRIES)",
+    retryBlockIdx,
+  );
+  assert.ok(maxIdx !== -1, "retry block must compare attempt against MAX");
   assert.ok(
     maxIdx < retryIdx,
     "MAX_ARTIFACT_VERIFICATION_RETRIES check must appear before return \"retry\"",
@@ -53,21 +90,22 @@ test("#2007 bug 1: attempt is compared against MAX_ARTIFACT_VERIFICATION_RETRIES
 });
 
 test("#2007 bug 1: exhaustion path pauses auto-mode instead of silently continuing", () => {
-  // When retries are exhausted, the code must call pauseAuto (not just fall through)
-  const exhaustionIdx = postUnitSrc.indexOf("MAX_ARTIFACT_VERIFICATION_RETRIES");
-  const pauseIdx = postUnitSrc.indexOf("pauseAuto", exhaustionIdx);
-  const retryIdx = postUnitSrc.indexOf("return \"retry\"");
+  const exhaustionIdx = postUnitPreVerificationBody.indexOf("phase: \"artifact-verify-exhausted\"");
+  assert.ok(exhaustionIdx !== -1, "exhaustion branch must log artifact-verify-exhausted");
+
+  const pauseIdx = postUnitPreVerificationBody.indexOf("await pauseAuto", exhaustionIdx);
+  const dispatchedIdx = postUnitPreVerificationBody.indexOf("return \"dispatched\"", exhaustionIdx);
 
   assert.ok(
-    pauseIdx !== -1 && pauseIdx < retryIdx,
-    "pauseAuto must be called in the exhaustion branch before return \"retry\"",
+    pauseIdx !== -1 && dispatchedIdx !== -1 && pauseIdx < dispatchedIdx,
+    "exhaustion branch must pause auto-mode before returning \"dispatched\"",
   );
 });
 
 test("#2007 bug 1: failure context message includes attempt count and max", () => {
   // The user-facing message should show progress, e.g. "(attempt 1/3)"
   assert.ok(
-    postUnitSrc.includes("MAX_ARTIFACT_VERIFICATION_RETRIES}"),
+    postUnitPreVerificationBody.includes("MAX_ARTIFACT_VERIFICATION_RETRIES}"),
     "retry notification message should include the max retry count",
   );
 });
@@ -152,14 +190,14 @@ test("#2007 verificationRetryCount is cleared on artifact verification success",
   // We assert on the structural shape because a behavioral test would need
   // to mock 30+ imports of postUnitPreVerification. The AutoSession-level
   // test below covers the Map contract.
-  const successClearIdx = postUnitSrc.indexOf(
+  const successClearIdx = postUnitPreVerificationBody.indexOf(
     "if (triggerArtifactVerified)",
   );
   assert.ok(
     successClearIdx !== -1,
     "Must guard the retry-count clear behind a triggerArtifactVerified check",
   );
-  const deleteIdx = postUnitSrc.indexOf(
+  const deleteIdx = postUnitPreVerificationBody.indexOf(
     "verificationRetryCount.delete",
     successClearIdx,
   );
