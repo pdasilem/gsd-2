@@ -5,6 +5,7 @@ import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { setupEditorSubmitHandler } from "./input-controller.js";
+import { ContextualTips } from "../../../core/contextual-tips.js";
 import type { InteractiveModeStateHost } from "../interactive-mode-state.js";
 import type { ImageContent } from "@gsd/pi-ai";
 
@@ -38,6 +39,7 @@ function createMockHost() {
 		keybindings: {},
 		statusContainer: {},
 		chatContainer: {},
+		pinnedMessageContainer: {},
 		settingsManager: {},
 		pendingTools: new Map(),
 		toolOutputExpanded: false,
@@ -74,10 +76,7 @@ function createMockHost() {
 		queueCompactionMessage: (_text: string, _mode: "steer" | "followUp") => {},
 		updatePendingMessagesDisplay: () => {},
 		flushPendingBashComponents: () => {},
-		contextualTips: {
-			recordBashIncluded: () => {},
-			evaluate: () => undefined,
-		},
+		contextualTips: new ContextualTips(),
 		getContextPercent: () => undefined,
 		options: { submitPromptsDirectly: true },
 	} satisfies InteractiveModeStateHost & Parameters<typeof setupEditorSubmitHandler>[0];
