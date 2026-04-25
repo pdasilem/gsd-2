@@ -315,7 +315,7 @@ export function auditOrphanedMilestoneBranches(
       // Branch is NOT merged — preserve for safety, warn the user
       warnings.push(
         `Branch ${branch} exists for completed milestone ${milestoneId} but is NOT merged into ${mainBranch}. ` +
-        `This may contain unmerged work. Merge manually or run \`/gsd health --fix\` to resolve.`,
+        `This may contain unmerged work. Merge manually or run \`/gsd doctor fix\` to resolve.`,
       );
 
       // #4764 telemetry
