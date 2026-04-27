@@ -128,6 +128,50 @@ describe("#4243 — abort() must run before _disconnectFromAgent()", () => {
 		assert.deepEqual(order, ["waitForIdle", "_disconnectFromAgent"]);
 	});
 
+	it("newSession() during agent_end preserves the previous session for resume", async () => {
+		const session = await createSession({ persistSessions: true });
+		const previousSessionFile = session.sessionFile;
+		assert.ok(previousSessionFile, "need a persisted session file");
+
+		session.sessionManager.appendMessage({
+			role: "user",
+			content: [{ type: "text", text: "persisted prompt" }],
+		} as any);
+		session.sessionManager.appendMessage({
+			role: "assistant",
+			content: [{ type: "text", text: "persisted response" }],
+			usage: {
+				input: 1,
+				output: 1,
+				cacheRead: 0,
+				cacheWrite: 0,
+				total: 2,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
+		} as any);
+		session.agent.replaceMessages(session.sessionManager.buildSessionContext().messages);
+
+		(session as any)._processingAgentEnd = true;
+		(session as any).agent.waitForIdle = async () => {};
+
+		const ok = await session.newSession();
+		assert.equal(ok, true);
+		assert.notEqual(session.sessionFile, previousSessionFile);
+		assert.deepEqual(session.messages, []);
+
+		(session as any)._processingAgentEnd = false;
+		const switched = await session.switchSession(previousSessionFile);
+		assert.equal(switched, true);
+
+		const restoredText = session.messages
+			.flatMap((message: any) => message.content ?? [])
+			.filter((part: any) => part.type === "text")
+			.map((part: any) => part.text);
+		assert.deepEqual(restoredText, ["persisted prompt", "persisted response"]);
+	});
+
 	it("switchSession() invokes abort() before _disconnectFromAgent()", async () => {
 		const session = await createSession({ persistSessions: true });
 		// Seed a session file to switch to (switchSession reads from the session manager).
