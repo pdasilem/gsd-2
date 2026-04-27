@@ -22,30 +22,11 @@ import { logWarning as safetyLogWarning } from "../workflow-logger.js";
 import { installNotifyInterceptor } from "./notify-interceptor.js";
 import { initNotificationStore } from "../notification-store.js";
 import { initNotificationWidget } from "../notification-widget.js";
+import { extractSubagentAgentClasses } from "./subagent-input.js";
 
 // Skip the welcome screen on the very first session_start — cli.ts already
 // printed it before the TUI launched. Only re-print on /clear (subsequent sessions).
 let isFirstSession = true;
-
-function extractSubagentAgentClasses(input: unknown): string[] | undefined {
-  if (!input || typeof input !== "object") return undefined;
-  const record = input as Record<string, unknown>;
-  const agentClasses: string[] = [];
-  const addAgentClass = (value: unknown): void => {
-    if (typeof value === "string" && value.trim().length > 0) agentClasses.push(value.trim());
-  };
-  const addFromItems = (value: unknown): void => {
-    if (!Array.isArray(value)) return;
-    for (const item of value) {
-      if (item && typeof item === "object") addAgentClass((item as Record<string, unknown>).agent);
-    }
-  };
-
-  addAgentClass(record.agent);
-  addFromItems(record.tasks);
-  addFromItems(record.chain);
-  return agentClasses.length > 0 ? agentClasses : undefined;
-}
 
 async function deriveGsdState(basePath: string) {
   const { deriveState } = await import("../state.js");

@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import { join, sep } from 'node:path';
 
 import { ALLOWED_PLANNING_DISPATCH_AGENTS, shouldBlockPlanningUnit } from '../bootstrap/write-gate.ts';
+import { extractSubagentAgentClasses } from '../bootstrap/subagent-input.ts';
 import { isDeterministicPolicyError } from '../auto-tool-tracking.ts';
 import type { ToolsPolicy } from '../unit-context-manifest.ts';
 
@@ -161,6 +162,18 @@ test('planning-dispatch: allows task dispatch (delegated recon/planner during sl
   assert.strictEqual(r.block, false);
 });
 
+test('planning-dispatch: extracts subagent classes from single, parallel, and chain inputs', () => {
+  assert.deepEqual(extractSubagentAgentClasses({ agent: ' scout ' }), ['scout']);
+  assert.deepEqual(
+    extractSubagentAgentClasses({ tasks: [{ agent: 'planner' }, { agent: ' tester ' }] }),
+    ['planner', 'tester'],
+  );
+  assert.deepEqual(
+    extractSubagentAgentClasses({ chain: [{ agent: 'reviewer' }, { agent: 'security' }] }),
+    ['reviewer', 'security'],
+  );
+});
+
 test('planning-dispatch: blocks subagent dispatch when agentClasses is undefined (stale caller shim)', () => {
   const r = shouldBlockPlanningUnit('subagent', '', BASE, 'plan-slice', PLANNING_DISPATCH, undefined);
   assert.strictEqual(r.block, true);
@@ -169,7 +182,9 @@ test('planning-dispatch: blocks subagent dispatch when agentClasses is undefined
 });
 
 test('planning-dispatch: allows explicitly empty agent classes for downstream validation', () => {
-  const empty = shouldBlockPlanningUnit('subagent', '', BASE, 'plan-slice', PLANNING_DISPATCH, []);
+  const emptyClasses = extractSubagentAgentClasses({});
+  assert.deepEqual(emptyClasses, []);
+  const empty = shouldBlockPlanningUnit('subagent', '', BASE, 'plan-slice', PLANNING_DISPATCH, emptyClasses);
   assert.strictEqual(empty.block, false);
 });
 
