@@ -37,6 +37,9 @@ import { hasImplementationArtifacts } from "./auto-recovery.js";
 import { classifyMilestoneSummaryContent } from "./milestone-summary-classifier.js";
 import {
   buildDiscussMilestonePrompt,
+  buildDiscussProjectPrompt,
+  buildDiscussRequirementsPrompt,
+  buildWorkflowPreferencesPrompt,
   buildResearchMilestonePrompt,
   buildPlanMilestonePrompt,
   buildResearchSlicePrompt,
@@ -472,6 +475,79 @@ export const DISPATCH_RULES: DispatchRule[] = [
           basePath,
           structuredQuestionsAvailable,
         ),
+      };
+    },
+  },
+  {
+    // Phase 11 — Deep mode stage gate: workflow preferences not yet captured.
+    // Fires once per project, before discuss-project, when planning_depth === "deep"
+    // and the project has no .gsd/config.json (or the file lacks the workflow keys).
+    // Captures 5 toggles via structured questions; writes config.json.
+    // Light mode skips entirely.
+    name: "deep: pre-planning (no workflow prefs) → workflow-preferences",
+    match: async ({ state, basePath, prefs, structuredQuestionsAvailable }) => {
+      if (prefs?.planning_depth !== "deep") return null;
+      if (state.phase !== "pre-planning" && state.phase !== "needs-discussion") return null;
+      const configPath = join(gsdRoot(basePath), "config.json");
+      if (existsSync(configPath)) {
+        // Treat presence of any of the 5 deep-mode keys as "already configured".
+        try {
+          const cfg = JSON.parse(readFileSync(configPath, "utf-8")) as Record<string, unknown>;
+          const hasAnyDeepKey =
+            "commit_policy" in cfg ||
+            "branch_model" in cfg ||
+            (typeof cfg.models === "object" && cfg.models !== null && "executor_class" in (cfg.models as Record<string, unknown>)) ||
+            "uat_dispatch" in cfg ||
+            (typeof cfg.phases === "object" && cfg.phases !== null && "skip_research" in (cfg.phases as Record<string, unknown>));
+          if (hasAnyDeepKey) return null; // already configured — fall through
+        } catch {
+          // malformed config — treat as missing and re-run
+        }
+      }
+      return {
+        action: "dispatch",
+        unitType: "workflow-preferences",
+        unitId: "WORKFLOW-PREFS",
+        prompt: await buildWorkflowPreferencesPrompt(basePath, structuredQuestionsAvailable),
+      };
+    },
+  },
+  {
+    // Phase 11 — Deep mode stage gate: PROJECT.md missing.
+    // Fires only when planning_depth === "deep" and PROJECT.md is missing.
+    // Project-level interview must complete before any milestone-level discussion.
+    // Light mode (default) skips this rule entirely — falls through to milestone rules.
+    name: "deep: pre-planning (no PROJECT) → discuss-project",
+    match: async ({ state, basePath, prefs, structuredQuestionsAvailable }) => {
+      if (prefs?.planning_depth !== "deep") return null;
+      if (state.phase !== "pre-planning" && state.phase !== "needs-discussion") return null;
+      const projectPath = join(gsdRoot(basePath), "PROJECT.md");
+      if (existsSync(projectPath)) return null; // PROJECT.md exists — fall through
+      return {
+        action: "dispatch",
+        unitType: "discuss-project",
+        unitId: "PROJECT",
+        prompt: await buildDiscussProjectPrompt(basePath, structuredQuestionsAvailable),
+      };
+    },
+  },
+  {
+    // Phase 11 — Deep mode stage gate: REQUIREMENTS.md missing.
+    // Fires only when planning_depth === "deep", PROJECT.md exists, and REQUIREMENTS.md is missing.
+    // Falls through in light mode or when REQUIREMENTS.md already exists.
+    name: "deep: pre-planning (no REQUIREMENTS) → discuss-requirements",
+    match: async ({ state, basePath, prefs, structuredQuestionsAvailable }) => {
+      if (prefs?.planning_depth !== "deep") return null;
+      if (state.phase !== "pre-planning" && state.phase !== "needs-discussion") return null;
+      const projectPath = join(gsdRoot(basePath), "PROJECT.md");
+      if (!existsSync(projectPath)) return null; // PROJECT.md missing — earlier rule handles
+      const requirementsPath = join(gsdRoot(basePath), "REQUIREMENTS.md");
+      if (existsSync(requirementsPath)) return null; // REQUIREMENTS.md exists — fall through
+      return {
+        action: "dispatch",
+        unitType: "discuss-requirements",
+        unitId: "REQUIREMENTS",
+        prompt: await buildDiscussRequirementsPrompt(basePath, structuredQuestionsAvailable),
       };
     },
   },

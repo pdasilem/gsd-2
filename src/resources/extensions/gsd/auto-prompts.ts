@@ -1287,6 +1287,62 @@ export async function buildDiscussMilestonePrompt(
   return basePrompt;
 }
 
+/**
+ * Build a prompt for the workflow-preferences unit type (Phase 11 — deep mode).
+ * Fixed-question wizard: captures 5 high-impact workflow toggles via structured
+ * questions and writes them to .gsd/config.json. Runs ONCE per project, early
+ * in deep-mode bootstrap before discuss-project.
+ */
+export async function buildWorkflowPreferencesPrompt(
+  base: string,
+  structuredQuestionsAvailable = "false",
+): Promise<string> {
+  return loadPrompt("guided-workflow-preferences", {
+    workingDirectory: base,
+    structuredQuestionsAvailable,
+  });
+}
+
+/**
+ * Build a prompt for the discuss-project unit type (Phase 11 — deep mode).
+ * Project-level interview: produces .gsd/PROJECT.md.
+ * Fires before any milestone-level work when planning_depth === "deep" and
+ * PROJECT.md is missing.
+ */
+export async function buildDiscussProjectPrompt(
+  base: string,
+  structuredQuestionsAvailable = "false",
+): Promise<string> {
+  const inlinedTemplates = inlineTemplate("project", "Project");
+
+  return loadPrompt("guided-discuss-project", {
+    workingDirectory: base,
+    inlinedTemplates,
+    structuredQuestionsAvailable,
+    commitInstruction: "Do not commit planning artifacts — .gsd/ is managed externally.",
+  });
+}
+
+/**
+ * Build a prompt for the discuss-requirements unit type (Phase 11 — deep mode).
+ * Requirements-level interview: produces .gsd/REQUIREMENTS.md using the
+ * structured R### format. Reads PROJECT.md as authoritative context.
+ * Fires when planning_depth === "deep", PROJECT.md exists, and REQUIREMENTS.md is missing.
+ */
+export async function buildDiscussRequirementsPrompt(
+  base: string,
+  structuredQuestionsAvailable = "false",
+): Promise<string> {
+  const inlinedTemplates = inlineTemplate("requirements", "Requirements");
+
+  return loadPrompt("guided-discuss-requirements", {
+    workingDirectory: base,
+    inlinedTemplates,
+    structuredQuestionsAvailable,
+    commitInstruction: "Do not commit planning artifacts — .gsd/ is managed externally.",
+  });
+}
+
 export async function buildResearchMilestonePrompt(mid: string, midTitle: string, base: string): Promise<string> {
   // #4782 phase 3: research-milestone migrated through the composer.
   // Declared inline order: milestone-context, project, requirements,

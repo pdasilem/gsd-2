@@ -344,6 +344,13 @@ export interface GSDPreferences {
   context_mode?: ContextModeConfig;
   token_profile?: TokenProfile;
   phases?: PhaseSkipPreferences;
+  /**
+   * Planning depth for new-project / new-milestone interactive flows.
+   * - "light" (default): single discuss-milestone session writes CONTEXT.md.
+   * - "deep": staged flow writes PROJECT.md → REQUIREMENTS.md → CONTEXT.md → ROADMAP.md
+   *   with user gates between each. Phase 11 (.planning/phases/11-deep-planning-mode/).
+   */
+  planning_depth?: "light" | "deep";
   auto_visualize?: boolean;
   /** Generate HTML report snapshot after each milestone completion. Default: true. Set false to disable. */
   auto_report?: boolean;
