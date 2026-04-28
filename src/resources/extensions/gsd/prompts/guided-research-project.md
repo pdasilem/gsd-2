@@ -10,11 +10,7 @@ Run **project-level domain research** in 4 parallel dimensions. Read `.gsd/PROJE
 
 Print this banner verbatim in chat as your first action:
 
-```text
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- GSD ► RESEARCHING (project)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-```
+• RESEARCHING (project)
 
 Then say: "Spawning 4 research agents in parallel: stack, features, architecture, pitfalls."
 

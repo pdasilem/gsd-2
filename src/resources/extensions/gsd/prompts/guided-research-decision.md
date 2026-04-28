@@ -12,11 +12,7 @@ This is a **fixed-question** stage. Do NOT do open Socratic interviewing. Ask th
 
 Print this banner verbatim in chat as your first action:
 
-```text
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- GSD ► RESEARCH DECISION
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-```
+• RESEARCH DECISION
 
 Then say: "Domain research finds table-stakes capabilities, ecosystem norms, and common pitfalls. Worth doing if you don't know this domain cold."
 

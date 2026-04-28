@@ -12,11 +12,7 @@ This is a **fixed-question** stage — do NOT do open Socratic interviewing. Ask
 
 Print this banner verbatim in chat as your first action:
 
-```text
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- GSD ► WORKFLOW PREFERENCES
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-```
+• WORKFLOW PREFERENCES
 
 Then say: "Quick setup — five workflow toggles. Defaults are sensible if you're not sure."
 
