@@ -944,6 +944,15 @@ export async function bootstrapAutoSession(
         : "Will loop until milestone complete.";
     ctx.ui.notify(`${modeLabel} started. ${scopeMsg}`, "info");
 
+    const providerReportedWindow = ctx.model?.contextWindow ?? 0;
+    const contextOverride = loadEffectiveGSDPreferences(base)?.preferences.context_window_override;
+    if (providerReportedWindow > 500_000 && contextOverride === undefined) {
+      ctx.ui.notify(
+        `Model reports a ${Math.round(providerReportedWindow / 1000)}K context window. If the provider's real API limit is lower, set context_window_override in .gsd/PREFERENCES.md so wrap-up signals fire before context overflow.`,
+        "warning",
+      );
+    }
+
     // Show dynamic routing status so users know upfront if models will be
     // downgraded for simple tasks (#3962).
     // Use the same effective logic as selectAndApplyModel: check flat-rate

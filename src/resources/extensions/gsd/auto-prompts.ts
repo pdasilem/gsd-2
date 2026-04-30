@@ -99,16 +99,17 @@ function capPreamble(preamble: string): string {
 function formatExecutorConstraints(
   sessionContextWindow?: number,
   modelRegistry?: MinimalModelRegistry,
+  sessionProvider?: string,
 ): string {
   let windowTokens: number;
   try {
     const prefs = loadEffectiveGSDPreferences();
-    windowTokens = resolveExecutorContextWindow(modelRegistry, prefs?.preferences, sessionContextWindow);
+    windowTokens = resolveExecutorContextWindow(modelRegistry, prefs?.preferences, sessionContextWindow, sessionProvider);
   } catch (e) {
     logWarning("prompt", `resolveExecutorContextWindow failed: ${(e as Error).message}`);
     // Delegate to the budget engine without prefs (the path that just threw)
     // so DEFAULT_CONTEXT_WINDOW stays the single source of truth.
-    windowTokens = resolveExecutorContextWindow(undefined, undefined, sessionContextWindow);
+    windowTokens = resolveExecutorContextWindow(undefined, undefined, sessionContextWindow, sessionProvider);
   }
   const budgets = computeBudgets(windowTokens);
   const { min, max } = budgets.taskCountRange;
@@ -1627,10 +1628,11 @@ async function renderSlicePrompt(options: {
   extraVars?: Record<string, string>;
   sessionContextWindow?: number;
   modelRegistry?: MinimalModelRegistry;
+  sessionProvider?: string;
 }): Promise<string> {
   const {
     mid, sid, sTitle, base, level, promptTemplate, prependBlocks = [], extraVars = {},
-    sessionContextWindow, modelRegistry,
+    sessionContextWindow, modelRegistry, sessionProvider,
   } = options;
 
   const roadmapPath = resolveMilestoneFile(base, mid, "ROADMAP");
@@ -1683,7 +1685,7 @@ async function renderSlicePrompt(options: {
   if (overridesInline) inlined.unshift(overridesInline);
 
   const inlinedContext = capPreamble(`## Inlined Context (preloaded — do not re-read these files)\n\n${inlined.join("\n\n---\n\n")}`);
-  const executorContextConstraints = formatExecutorConstraints(sessionContextWindow, modelRegistry);
+  const executorContextConstraints = formatExecutorConstraints(sessionContextWindow, modelRegistry, sessionProvider);
   const outputRelPath = relSliceFile(base, mid, sid, "PLAN");
   const commitInstruction = "Do not commit — .gsd/ planning docs are managed externally and not tracked in git.";
 
@@ -1717,6 +1719,7 @@ export async function buildPlanSlicePrompt(
     softScopeHint?: string;
     sessionContextWindow?: number;
     modelRegistry?: MinimalModelRegistry;
+    sessionProvider?: string;
     /** Failure context from a prior pre-exec gate run (#4551). When present, a
      *  "Fix these specific issues" section is appended so the LLM addresses the
      *  exact problems instead of producing an identical plan that fails again. */
@@ -1760,6 +1763,7 @@ export async function buildPlanSlicePrompt(
     prependBlocks,
     sessionContextWindow: options?.sessionContextWindow,
     modelRegistry: options?.modelRegistry,
+    sessionProvider: options?.sessionProvider,
   });
 }
 
@@ -1772,7 +1776,7 @@ export async function buildPlanSlicePrompt(
  */
 export async function buildRefineSlicePrompt(
   mid: string, _midTitle: string, sid: string, sTitle: string, base: string, level?: InlineLevel,
-  options?: { sessionContextWindow?: number; modelRegistry?: MinimalModelRegistry },
+  options?: { sessionContextWindow?: number; modelRegistry?: MinimalModelRegistry; sessionProvider?: string },
 ): Promise<string> {
   // Pull the stored sketch scope from the DB — the hard constraint we plan within.
   let sketchScope = "";
@@ -1801,6 +1805,7 @@ export async function buildRefineSlicePrompt(
     extraVars: { sketchScope },
     sessionContextWindow: options?.sessionContextWindow,
     modelRegistry: options?.modelRegistry,
+    sessionProvider: options?.sessionProvider,
   });
 }
 
@@ -1813,6 +1818,8 @@ export interface ExecuteTaskPromptOptions {
   sessionContextWindow?: number;
   /** Model registry forwarded to the budget engine for executor-model lookup. */
   modelRegistry?: MinimalModelRegistry;
+  /** Session model provider, used for provider-specific effective context windows. */
+  sessionProvider?: string;
 }
 
 export async function buildExecuteTaskPrompt(
@@ -1904,7 +1911,7 @@ export async function buildExecuteTaskPrompt(
 
   // Compute verification budget for the executor's context window (issue #707)
   const prefs = loadEffectiveGSDPreferences();
-  const contextWindow = resolveExecutorContextWindow(opts.modelRegistry, prefs?.preferences, opts.sessionContextWindow);
+  const contextWindow = resolveExecutorContextWindow(opts.modelRegistry, prefs?.preferences, opts.sessionContextWindow, opts.sessionProvider);
   const budgets = computeBudgets(contextWindow);
   const verificationBudget = `~${Math.round(budgets.verificationBudgetChars / 1000)}K chars`;
 
@@ -2587,7 +2594,7 @@ export async function buildReactiveExecutePrompt(
   mid: string, midTitle: string, sid: string, sTitle: string,
   readyTaskIds: string[], base: string,
   subagentModel?: string,
-  opts?: { sessionContextWindow?: number; modelRegistry?: MinimalModelRegistry },
+  opts?: { sessionContextWindow?: number; modelRegistry?: MinimalModelRegistry; sessionProvider?: string },
 ): Promise<string> {
   const { loadSliceTaskIO, deriveTaskGraph, graphMetrics } = await import("./reactive-graph.js");
 
@@ -2633,6 +2640,7 @@ export async function buildReactiveExecutePrompt(
         carryForwardPaths: depPaths,
         sessionContextWindow: opts?.sessionContextWindow,
         modelRegistry: opts?.modelRegistry,
+        sessionProvider: opts?.sessionProvider,
       },
     );
 

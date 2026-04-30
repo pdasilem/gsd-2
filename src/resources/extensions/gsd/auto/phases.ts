@@ -968,6 +968,7 @@ export async function runDispatch(
     session: s,
     structuredQuestionsAvailable,
     sessionContextWindow: ctx.model?.contextWindow,
+    sessionProvider: ctx.model?.provider,
     modelRegistry: ctx.modelRegistry as MinimalModelRegistry | undefined,
   });
 
