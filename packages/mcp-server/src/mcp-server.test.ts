@@ -12,7 +12,9 @@
 
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolve } from 'node:path';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { delimiter, join, resolve } from 'node:path';
 import { EventEmitter } from 'node:events';
 
 import { SessionManager } from './session-manager.js';
@@ -564,6 +566,7 @@ describe('SessionManager', () => {
 describe('SessionManager.resolveCLIPath', () => {
   const originalGsdPath = process.env['GSD_CLI_PATH'];
   const originalPath = process.env['PATH'];
+  const originalPathTitle = process.env['Path'];
 
   afterEach(() => {
     if (originalGsdPath !== undefined) {
@@ -573,6 +576,13 @@ describe('SessionManager.resolveCLIPath', () => {
     }
     if (originalPath !== undefined) {
       process.env['PATH'] = originalPath;
+    } else {
+      delete process.env['PATH'];
+    }
+    if (originalPathTitle !== undefined) {
+      process.env['Path'] = originalPathTitle;
+    } else {
+      delete process.env['Path'];
     }
   });
 
@@ -582,8 +592,50 @@ describe('SessionManager.resolveCLIPath', () => {
     assert.equal(result, resolve('/custom/path/to/gsd'));
   });
 
-  it('throws when GSD_CLI_PATH not set and which fails', () => {
+  it('finds gsd on PATH without shelling out to which', () => {
     delete process.env['GSD_CLI_PATH'];
+    const tmp = mkdtempSync(join(tmpdir(), 'gsd-cli-path-'));
+    try {
+      const shimName = process.platform === 'win32' ? 'gsd.cmd' : 'gsd';
+      const shimPath = join(tmp, shimName);
+      writeFileSync(shimPath, '', 'utf8');
+      process.env['PATH'] = [tmp, originalPath].filter(Boolean).join(delimiter);
+
+      const resolvedPath = SessionManager.resolveCLIPath();
+      if (process.platform === 'win32') {
+        assert.equal(resolvedPath.toLowerCase(), resolve(shimPath).toLowerCase());
+      } else {
+        assert.equal(resolvedPath, resolve(shimPath));
+      }
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('finds gsd when Windows exposes Path instead of PATH', () => {
+    delete process.env['GSD_CLI_PATH'];
+    delete process.env['PATH'];
+    const tmp = mkdtempSync(join(tmpdir(), 'gsd-cli-path-title-'));
+    try {
+      const shimName = process.platform === 'win32' ? 'gsd.cmd' : 'gsd';
+      const shimPath = join(tmp, shimName);
+      writeFileSync(shimPath, '', 'utf8');
+      process.env['Path'] = tmp;
+
+      const resolvedPath = SessionManager.resolveCLIPath();
+      if (process.platform === 'win32') {
+        assert.equal(resolvedPath.toLowerCase(), resolve(shimPath).toLowerCase());
+      } else {
+        assert.equal(resolvedPath, resolve(shimPath));
+      }
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('throws when GSD_CLI_PATH not set and PATH lookup fails', () => {
+    delete process.env['GSD_CLI_PATH'];
+    delete process.env['Path'];
     process.env['PATH'] = '/nonexistent';
     assert.throws(
       () => SessionManager.resolveCLIPath(),

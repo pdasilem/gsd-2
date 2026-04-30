@@ -155,6 +155,8 @@ Recommended verification order:
 - Use absolute paths for local executables and scripts when possible.
 - For `stdio` servers, prefer setting required environment variables directly in the MCP config instead of relying on an interactive shell profile.
 - GSD and `gsd-mcp-server` both hydrate supported model and tool keys saved in `~/.gsd/agent/auth.json`, so MCP configs can safely reference them through `${ENV_VAR}` placeholders without committing raw credentials.
+- MCP server runtime variables such as `GSD_WORKFLOW_EXECUTORS_MODULE`, `GSD_WORKFLOW_WRITE_GATE_MODULE`, `GSD_WORKFLOW_PROJECT_ROOT`, `GSD_CLI_PATH`, `NODE_OPTIONS`, `NODE_PATH`, `PATH`, `LD_PRELOAD`, and `DYLD_INSERT_LIBRARIES` cannot be set through `secure_env_collect`; configure them explicitly in the operator environment or MCP config.
+- When `secure_env_collect` writes to a local dotenv file, the accepted keys are also hydrated into the current MCP server process. When it pushes to Vercel or Convex, the values are sent to the remote destination only and are not added to `process.env`.
 - If a server is team-shared and safe to commit, `.mcp.json` is usually the better home.
 - If a server depends on machine-local paths, personal services, or local-only secrets, prefer `.gsd/mcp.json`.
 
