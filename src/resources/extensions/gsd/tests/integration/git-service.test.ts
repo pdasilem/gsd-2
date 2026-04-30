@@ -223,6 +223,18 @@ describe('git-service', async () => {
     assert.ok(msg.includes("GSD-Task: S01/T02"), "GSD-Task trailer in body");
   });
 
+  test('buildTaskCommitMessage sanitizes subject text', () => {
+    const msg = buildTaskCommitMessage({
+      taskId: "S01/T03",
+      taskTitle: "implement subject cleanup",
+      oneLiner: "Added auth\n\nBREAKING: injected\r\u0007trailer",
+    });
+    const subject = msg.split("\n")[0];
+    assert.ok(subject.includes("Added auth BREAKING: injected trailer"), "control characters are flattened");
+    assert.equal(subject.includes("\r"), false, "subject does not include carriage returns");
+    assert.equal(subject.includes("\u0007"), false, "subject does not include control characters");
+  });
+
   {
     const msg = buildTaskCommitMessage({
       taskId: "S02/T01",

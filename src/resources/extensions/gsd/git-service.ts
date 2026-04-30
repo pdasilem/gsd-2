@@ -147,7 +147,7 @@ export interface TaskCommitContext {
  * what was actually built), falling back to the task title (what was planned).
  */
 export function buildTaskCommitMessage(ctx: TaskCommitContext): string {
-  const description = ctx.oneLiner || ctx.taskTitle;
+  const description = sanitizeCommitSubjectDescription(ctx.oneLiner || ctx.taskTitle);
   const type = inferCommitType(ctx.taskTitle, ctx.oneLiner);
 
   // Truncate description to ~72 chars for subject line (full budget without scope)
@@ -177,6 +177,14 @@ export function buildTaskCommitMessage(ctx: TaskCommitContext): string {
   }
 
   return `${subject}\n\n${bodyParts.join("\n\n")}`;
+}
+
+function sanitizeCommitSubjectDescription(value: string): string {
+  const cleaned = value
+    .replace(/[\x00-\x1F\x7F]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleaned || "update task";
 }
 
 function normalizeRepoRelativePath(basePath: string, filePath: string): string | null {
